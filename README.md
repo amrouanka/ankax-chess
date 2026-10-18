@@ -21,11 +21,6 @@ The engine is built for experimentation and learning as well as practical use in
 - Built-in tactical test positions for validation
 - Time-control support for move-based and clock-based searches
 
-## Requirements
-
-- .NET SDK 10.0 or later
-- A system capable of running .NET applications
-
 ## Installation
 
 Clone the repository and restore dependencies:
