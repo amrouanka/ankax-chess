@@ -224,37 +224,35 @@ public static class Uci
     // Main UCI loop
     public static void UciLoop()
     {
-        // Print engine info
-        Console.WriteLine("id name BBC");
-        Console.WriteLine("id name Amrou");
-        Console.WriteLine("uciok");
-
         while (true)
         {
             if (TimeManagement.quit)
                 break;
 
-            // Read a line from stdin
             string? input = Console.ReadLine();
             if (string.IsNullOrEmpty(input))
                 continue;
 
-            // Trim whitespace
             input = input.Trim();
 
-            // Parse UCI commands
-            if (input.StartsWith("isready"))
+            if (input == "uci")
+            {
+                Console.WriteLine("id name Anka v1.0.0");
+                Console.WriteLine("id author Amrou");
+                Console.WriteLine("uciok");
+            }
+            else if (input.StartsWith("isready"))
             {
                 Console.WriteLine("readyok");
-            }
-            else if (input.StartsWith("position"))
-            {
-                ParsePosition(input);
             }
             else if (input.StartsWith("ucinewgame"))
             {
                 ParsePosition("position startpos");
-                TranspositionTable.Clear(); // ✅ Clear TT only on new game
+                TranspositionTable.Clear();
+            }
+            else if (input.StartsWith("position"))
+            {
+                ParsePosition(input);
             }
             else if (input.StartsWith("go"))
             {
@@ -263,15 +261,14 @@ public static class Uci
                 if (TimeManagement.quit)
                     break;
             }
+            else if (input.StartsWith("stop"))
+            {
+                TimeManagement.stopped = true;
+            }
             else if (input.StartsWith("quit"))
             {
+                TimeManagement.stopped = true;
                 break;
-            }
-            else if (input.StartsWith("uci"))
-            {
-                Console.WriteLine("id name BBC");
-                Console.WriteLine("id name Amrou");
-                Console.WriteLine("uciok");
             }
         }
     }
