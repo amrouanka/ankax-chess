@@ -1,10 +1,10 @@
-# Anka
+# AnkaX
 
 A bitboard chess engine written in C#. Speaks UCI.
 
 ## Overview
 
-Anka is a custom chess engine that parses FEN positions, generates legal moves, searches using alpha-beta pruning with advanced heuristics, and evaluates positions using tapered material, piece-square tables, mobility, king safety, passed pawns, and more. It communicates via the UCI protocol and is compatible with all major chess GUIs.
+AnkaX is a custom chess engine that parses FEN positions, generates legal moves, searches using alpha-beta pruning with advanced heuristics, and evaluates positions using tapered material, piece-square tables, mobility, king safety, passed pawns, and more. It communicates via the UCI protocol and is compatible with all major chess GUIs.
 
 ## Estimated Strength
 
@@ -32,7 +32,7 @@ Anka is a custom chess engine that parses FEN positions, generates legal moves, 
 ## Installation
 
     git clone <repo-url>
-    cd Anka
+    cd AnkaX
     dotnet restore
 
 ## Build
@@ -43,7 +43,7 @@ Or publish a self-contained single-file executable (no .NET runtime required):
 
     dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:PublishAot=false
 
-The output will be in `bin/Release/net10.0/win-x64/publish/Anka.exe`.
+The output will be in `bin/Release/net10.0/win-x64/publish/AnkaX.exe`.
 
 ## Run
 
@@ -51,15 +51,15 @@ The output will be in `bin/Release/net10.0/win-x64/publish/Anka.exe`.
 
 Or run the published executable directly:
 
-    Anka.exe
+    AnkaX.exe
 
 The engine starts in UCI mode and waits for commands from standard input.
 
 ## Example UCI Session
 
-    > Anka.exe
+    > AnkaX.exe
     uci
-    id name Anka v1.0.1
+    id name AnkaX v1.0.2
     id author Amrou
     uciok
     isready
@@ -86,11 +86,11 @@ The engine starts in UCI mode and waits for commands from standard input.
 | `Move.cs` | Move encoding and decoding |
 | `TimeManagement.cs` | Search timing and clock management |
 | `Enums.cs` | Piece, square, and flag constants |
-| `Anka.csproj` | .NET project file |
+| `AnkaX.csproj` | .NET project file |
 
 ## Development Notes
 
-Anka uses techniques common in strong chess engines:
+AnkaX uses techniques common in strong chess engines:
 
 - Bitboards for fast board operations
 - Flat-array storage for hot-path performance

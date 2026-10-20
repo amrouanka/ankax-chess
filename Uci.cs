@@ -237,7 +237,7 @@ public static class Uci
 
             if (input == "uci")
             {
-                Console.WriteLine("id name Anka v1.0.0");
+                Console.WriteLine("id name AnkaX v1.0.2");
                 Console.WriteLine("id author Amrou");
                 Console.WriteLine("uciok");
             }

@@ -9,6 +9,7 @@
     <PublishAot>false</PublishAot>
     <InvariantGlobalization>true</InvariantGlobalization>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <AssemblyName>AnkaX</AssemblyName>
   </PropertyGroup>
 
 </Project>
