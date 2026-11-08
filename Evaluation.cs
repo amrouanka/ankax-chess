@@ -558,28 +558,43 @@ public static class Evaluation
         ulong bOcc = occupancies[Black];
         ulong all = occupancies[Both];
 
-        // Knights
-        ScorePieceMobility(bitboards[N], sq => knightAttacks[sq] & ~wOcc,
-            KnightMobBase, KnightMobMg, KnightMobEg, +1, ref mg, ref eg);
-        ScorePieceMobility(bitboards[n], sq => knightAttacks[sq] & ~bOcc,
-            KnightMobBase, KnightMobMg, KnightMobEg, -1, ref mg, ref eg);
-
-        // Bishops
-        ScorePieceMobility(bitboards[B], sq => GetBishopAttacks(sq, all) & ~wOcc,
-            BishopMobBase, BishopMobMg, BishopMobEg, +1, ref mg, ref eg);
-        ScorePieceMobility(bitboards[b], sq => GetBishopAttacks(sq, all) & ~bOcc,
-            BishopMobBase, BishopMobMg, BishopMobEg, -1, ref mg, ref eg);
-    }
-
-    private static void ScorePieceMobility(ulong bb, Func<int, ulong> getAttacks,
-        int baseline, int mgWeight, int egWeight, int sign, ref int mg, ref int eg)
-    {
-        while (bb != 0)
+        // White Knights
+        for (ulong bb = bitboards[N]; bb != 0;)
         {
             int sq = BitboardOperations.GetLs1bIndex(bb);
-            int mobility = BitboardOperations.CountBits(getAttacks(sq)) - baseline;
-            mg += sign * mobility * mgWeight;
-            eg += sign * mobility * egWeight;
+            int mobility = BitboardOperations.CountBits(knightAttacks[sq] & ~wOcc) - KnightMobBase;
+            mg += mobility * KnightMobMg;
+            eg += mobility * KnightMobEg;
+            BitboardOperations.PopBit(ref bb, sq);
+        }
+
+        // Black Knights
+        for (ulong bb = bitboards[n]; bb != 0;)
+        {
+            int sq = BitboardOperations.GetLs1bIndex(bb);
+            int mobility = BitboardOperations.CountBits(knightAttacks[sq] & ~bOcc) - KnightMobBase;
+            mg -= mobility * KnightMobMg;
+            eg -= mobility * KnightMobEg;
+            BitboardOperations.PopBit(ref bb, sq);
+        }
+
+        // White Bishops
+        for (ulong bb = bitboards[B]; bb != 0;)
+        {
+            int sq = BitboardOperations.GetLs1bIndex(bb);
+            int mobility = BitboardOperations.CountBits(GetBishopAttacks(sq, all) & ~wOcc) - BishopMobBase;
+            mg += mobility * BishopMobMg;
+            eg += mobility * BishopMobEg;
+            BitboardOperations.PopBit(ref bb, sq);
+        }
+
+        // Black Bishops
+        for (ulong bb = bitboards[b]; bb != 0;)
+        {
+            int sq = BitboardOperations.GetLs1bIndex(bb);
+            int mobility = BitboardOperations.CountBits(GetBishopAttacks(sq, all) & ~bOcc) - BishopMobBase;
+            mg -= mobility * BishopMobMg;
+            eg -= mobility * BishopMobEg;
             BitboardOperations.PopBit(ref bb, sq);
         }
     }

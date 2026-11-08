@@ -204,6 +204,10 @@ public static class Search
     // Now: int[12 * 64] -- indexed as historyMoves[(piece << 6) | target]
     private static readonly int[] historyMoves = new int[12 << HistoryShift];
 
+    // Pre-allocated move lists, one per ply. Eliminates ~2KB heap allocation per node.
+    // Safe because only one ply generates moves at a time.
+    private static readonly MoveList[] moveLists = new MoveList[MaxPly + 2];
+
     // Original mvvLva kept as the source-of-truth for initialization
     private static readonly int[,] mvvLva =
     {
@@ -229,6 +233,11 @@ public static class Search
 
     static Search()
     {
+        // Pre-allocate move lists once. Each MoveList constructor creates two int[256] arrays.
+        // After this, zero allocations happen during search.
+        for (int i = 0; i < moveLists.Length; i++)
+            moveLists[i] = new MoveList();
+
         // Initialize LMR table (flat version)
         for (int depth = 0; depth <= MaxPly; depth++)
         {
@@ -412,7 +421,7 @@ public static class Search
 
         if (bestMove == 0)
         {
-            MoveList moveList = new MoveList();
+            ref MoveList moveList = ref moveLists[0];
             GenerateMoves(ref moveList);
 
             int[] moves = moveList.moves;
@@ -582,7 +591,7 @@ public static class Search
         if (quietNode && depth <= FutilityMaxDepth)
             canPrune = staticEval + FutilityMarginPerDepth * depth <= alpha;
 
-        MoveList moveList = new MoveList();
+        ref MoveList moveList = ref moveLists[currentPly];
         GenerateMoves(ref moveList);
 
         // Compute killer index once. killerMoves[(ply*2)] = killer1,
@@ -794,7 +803,7 @@ public static class Search
                 alpha = eval;
         }
 
-        MoveList moveList = new MoveList();
+        ref MoveList moveList = ref moveLists[currentPly];
         if (inCheck)
             GenerateMoves(ref moveList);
         else
