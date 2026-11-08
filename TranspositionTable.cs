@@ -138,21 +138,3 @@ public static class TranspositionTable
         return NoScore; // Score doesn't allow cutoff, search normaly
     }
 }
-/*
-Role: Act as a Computer Chess Expert.
-Task: Analyze my engine’s source code and recommend the next "best hit" feature to improve ELO.
-
-Context:
-
-Attached are my Search and Transposition Table files.
-Already Attempted / Failed:
-SEE (Static Exchange Evaluation) — no gain / didn’t work as expected.
-1-ply Continuation History — tested and failed.
-Current State: I want the highest ELO boost relative to implementation complexity. Do not suggest the failed features above.
-Please:
-
-Identify the most significant "hole" in my current implementation.
-Suggest one specific feature (e.g. Null Move Pruning, Singular Extensions, Late Move Pruning, better History, or other search improvements).
-Explain why this feature fits my current architecture better than alternatives.
-Provide brief pseudocode or a logic outline for integrating it into my existing Search.
-*/
