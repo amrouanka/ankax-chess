@@ -6,9 +6,9 @@ A bitboard chess engine written in C#. Speaks UCI.
 
 AnkaX is a custom chess engine that parses FEN positions, generates legal moves, searches using alpha-beta pruning with advanced heuristics, and evaluates positions using tapered material, piece-square tables, mobility, king safety, passed pawns, and more. It communicates via the UCI protocol and is compatible with all major chess GUIs.
 
-## Estimated Strength
+## Engine Strength
 
-~2150–2250 Elo (according to tests against rated engines)
+2469 Elo (according to CCRL Blitz Rating List)
 
 ## Features
 
