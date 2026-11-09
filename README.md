@@ -4,11 +4,22 @@ A bitboard chess engine written in C#. Speaks UCI.
 
 ## Overview
 
-AnkaX is a custom chess engine that parses FEN positions, generates legal moves, searches using alpha-beta pruning with advanced heuristics, and evaluates positions using tapered material, piece-square tables, mobility, king safety, passed pawns, and more. It communicates via the UCI protocol and is compatible with all major chess GUIs.
+AnkaX is a custom chess engine that parses FEN positions, generates legal moves,
+searches using alpha-beta pruning with advanced heuristics, and evaluates
+positions using tapered material, piece-square tables, mobility, king safety,
+passed pawns, and more. It communicates via the UCI protocol and is compatible
+with all major chess GUIs.
 
 ## Engine Strength
 
-2469 Elo (according to CCRL Blitz Rating List)
+- **CCRL Blitz:** 2469 Elo (v1.0.2, [CCRL Blitz Rating List](https://www.computerchess.org.uk/ccrl/404/))
+- **v1.0.3:** +46 Elo over v1.0.2 (self-play, performance optimizations)
+- **v1.0.4:** +7 Elo over v1.0.3 (self-play, history heuristic improvements)
+
+> Self-play results measured at 3+0.05 using
+> [cutechess-cli](https://github.com/cutechess/cutechess) with the
+> [UHO 4060 v4](https://www.sp-ohl.de/books/books.html) opening book
+> (12 plies, randomized).
 
 ## Features
 
@@ -31,8 +42,8 @@ AnkaX is a custom chess engine that parses FEN positions, generates legal moves,
 
 ## Installation
 
-    git clone <repo-url>
-    cd AnkaX
+    git clone https://github.com/amrouanka/ankax-chess.git
+    cd ankax-chess
     dotnet restore
 
 ## Build
@@ -59,8 +70,8 @@ The engine starts in UCI mode and waits for commands from standard input.
 
     > AnkaX.exe
     uci
-    id name AnkaX v1.0.2
-    id author Amrou
+    id name AnkaX v1.0.4
+    id author Amrou Louai Anka
     uciok
     isready
     readyok
@@ -69,34 +80,73 @@ The engine starts in UCI mode and waits for commands from standard input.
     info score cp 37 depth 9 nodes 69791 pv e2e4 e7e5 g1f3 g8f6 b1c3 b8c6 d2d4 e5d4 f3d4
     bestmove g1f3
 
+## Testing & Self-Play
+
+This repository includes scripts for automated self-play testing using
+[cutechess-cli](https://github.com/cutechess/cutechess).
+
+### Prerequisites
+
+1. Install [cutechess-cli](https://github.com/cutechess/cutechess/releases)
+   and update the `CUTECHESS` path in `run_match.bat` if needed.
+2. Place an opening book in the `books/` directory. This project uses
+   [UHO 4060 v4](https://www.sp-ohl.de/books/books.html) by Stefan Pohl.
+
+### Running a Match
+
+    run_match.bat
+
+This runs 10,000 games between the current dev build and the release build
+in `releases/AnkaX.exe`, using 3+0.05 time control with the UHO book.
+Results are saved to `dev_vs_release.pgn`.
+
+### Checking Results
+
+    check_los.bat
+
+Parses the PGN and displays Elo difference, error margin, and Likelihood of
+Superiority (LOS).
+
 ## Project Structure
 
-| File | Description |
-|---|---|
-| `Program.cs` | Entry point |
+| File / Directory | Description |
+| --- | --- |
+| `Program.cs` | Entry point, tactical test suite, perft driver |
 | `Uci.cs` | UCI protocol parser and engine loop |
-| `Board.cs` | Board state, FEN parsing, make/unmake |
-| `MoveGenerator.cs` | Legal move generation |
-| `PieceAttacks.cs` | Attack tables (knight, king, pawn, sliding) |
-| `BitboardOperations.cs` | Bitboard helpers (popcount, LSB, etc.) |
-| `Search.cs` | Alpha-beta search, quiescence, pruning |
-| `Evaluation.cs` | Tapered evaluation function |
-| `TranspositionTable.cs` | Hash table |
-| `Zobrist.cs` | Zobrist key generation |
-| `Move.cs` | Move encoding and decoding |
+| `Board.cs` | Board state, FEN parsing, copy/takeback |
+| `MoveGenerator.cs` | Legal move generation and make-move |
+| `PieceAttacks.cs` | Attack tables (leapers, magic bitboards for sliders) |
+| `BitboardOperations.cs` | Bitboard helpers (popcount, LSB, set/pop bit) |
+| `Search.cs` | PVS alpha-beta search, quiescence, pruning, move ordering |
+| `Evaluation.cs` | Tapered evaluation with PeSTO PSTs and positional features |
+| `TranspositionTable.cs` | Hash table with Zobrist keying |
+| `Zobrist.cs` | Zobrist hash key generation |
+| `Move.cs` | Move encoding/decoding, move list, board state snapshot |
 | `TimeManagement.cs` | Search timing and clock management |
-| `Enums.cs` | Piece, square, and flag constants |
-| `AnkaX.csproj` | .NET project file |
+| `Enums.cs` | Piece, square, castling, and flag constants |
+| `AnkaX.csproj` | .NET 10 project file |
+| `books/` | Opening books for self-play testing |
+| `releases/` | Published executables for version comparison |
+| `run_match.bat` | Automated self-play match script (cutechess-cli) |
+| `check_los.bat` | PGN result analyzer (Elo, LOS) |
 
 ## Development Notes
 
 AnkaX uses techniques common in strong chess engines:
 
 - Bitboards for fast board operations
-- Flat-array storage for hot-path performance
+- Flat-array storage for hot-path performance (no multi-dimensional arrays on the search path)
+- Pre-allocated move lists to eliminate GC pressure during search
 - Aggressive move ordering for search efficiency
 - Multiple pruning heuristics for reduced search cost
 - Transposition tables for repeated positions
+- Hardware-accelerated bit counting (`POPCNT`)
+
+## Credits
+
+- Opening book: [UHO 4060 v4](https://www.sp-ohl.de/books/books.html) by **Stefan Pohl**
+- Testing framework: [cutechess-cli](https://github.com/cutechess/cutechess) by Ilari Pihlajisto, Arto Jonsson, and contributors
+- Engine architecture inspired by the [Chess Programming Wiki](https://www.chessprogramming.org/) and the BBC/Code Monkey King tutorial series
 
 ## License
 
@@ -104,4 +154,5 @@ MIT — see [LICENSE](LICENSE).
 
 ## Contributing
 
-Contributions are welcome. Pull requests should include a clear description of the change and any relevant validation steps.
+Contributions are welcome. Pull requests should include a clear description of
+the change and any relevant validation steps (perft results, self-play Elo).
