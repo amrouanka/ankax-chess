@@ -156,6 +156,10 @@ public static class Search
     // Quiescence
     private const int QsDeltaMargin = 200;
 
+    // History gravity: smoothly bounds scores between -MaxHistory and +MaxHistory
+    // without hard clamping. Formula: history += bonus - history * |bonus| / MaxHistory
+    private const int MaxHistory = 16384;
+
     // Internal
     private const int TimeCheckMask = 16383;
     private const int RepetitionTableSize = 1024;
@@ -714,6 +718,8 @@ public static class Search
             {
                 if (isQuiet)
                 {
+                    UpdateHistory(move, depthSquared);
+
                     if (killerMoves[killerIndex] != move)
                     {
                         killerMoves[killerIndex + 1] = killerMoves[killerIndex];
@@ -736,8 +742,7 @@ public static class Search
             {
                 if (isQuiet)
                 {
-                    // Flat history: (piece << 6) | target
-                    historyMoves[(GetMovePiece(move) << HistoryShift) | GetMoveTarget(move)] += depthSquared;
+                    UpdateHistory(move, depthSquared);
                 }
 
                 alpha = score;
@@ -957,8 +962,9 @@ public static class Search
         // Flat history: (piece << 6) | target
         int history = historyMoves[(GetMovePiece(move) << HistoryShift) | target];
 
-        if (history > 7000) return 7000;
-        return history;
+        // Clamp to safe range: below killers (8000-9000) but allows negative values
+        // to push bad quiet moves to the bottom of the list.
+        return Math.Clamp(history, -7000, 7000);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -972,6 +978,13 @@ public static class Search
         K or k => 20000,
         _ => 0
     };
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void UpdateHistory(int move, int bonus)
+    {
+        int index = (GetMovePiece(move) << HistoryShift) | GetMoveTarget(move);
+        historyMoves[index] += bonus - historyMoves[index] * Math.Abs(bonus) / MaxHistory;
+    }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static bool IsInCheck()
