@@ -19,7 +19,7 @@ jobs:
       - name: Build cutechess from source
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake qtbase5-dev
+          sudo apt-get install -y cmake qt6-base-dev
           git clone --depth 1 https://github.com/cutechess/cutechess.git /tmp/cutechess
           cd /tmp/cutechess
           cmake -B build -DCMAKE_BUILD_TYPE=Release
