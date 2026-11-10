@@ -70,8 +70,8 @@ jobs:
           GAMES=${{ inputs.games }}
           HALF=$((GAMES / 2))
           cutechess-cli \
-            -engine cmd=./dev_build/AnkaX name=Dev \
-            -engine cmd=./base_build/AnkaX name=Base \
+            -engine cmd=./dev_build/AnkaX name=Dev proto=uci \
+            -engine cmd=./base_build/AnkaX name=Base proto=uci \
             -each tc=3+0.05 \
             -games 2 -rounds $HALF \
             -repeat 2 \
