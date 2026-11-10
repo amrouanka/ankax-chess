@@ -19,12 +19,13 @@ jobs:
       - name: Build cutechess from source
         run: |
           sudo apt-get update
-          sudo apt-get install -y qtbase5-dev
+          sudo apt-get install -y cmake qtbase5-dev
           git clone --depth 1 https://github.com/cutechess/cutechess.git /tmp/cutechess
           cd /tmp/cutechess
-          qmake
-          make -j$(nproc)
-          sudo cp projects/cli/cutechess-cli /usr/local/bin/
+          cmake -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build -j$(nproc)
+          sudo find build -name "cutechess-cli" -exec cp {} /usr/local/bin/ \;
+          chmod +x /usr/local/bin/cutechess-cli
           cutechess-cli --version
 
       - name: Setup .NET
