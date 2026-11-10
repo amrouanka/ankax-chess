@@ -7,26 +7,22 @@ on:
         description: 'Baseline git tag'
         required: true
         default: 'v1.0.4'
-      games:
-        description: 'Total games (must be even)'
+      games_per_shard:
+        description: 'Games per shard (must be even)'
         required: true
-        default: '4000'
+        default: '500'
 
 jobs:
   test:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-22.04
+    strategy:
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
     steps:
-      - name: Build cutechess from source
+      - name: Install cutechess
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake qt6-base-dev qt6-svg-dev
-          git clone --depth 1 https://github.com/cutechess/cutechess.git /tmp/cutechess
-          cd /tmp/cutechess
-          cmake -B build -DCMAKE_BUILD_TYPE=Release
-          cmake --build build -j$(nproc)
-          sudo find build -name "cutechess-cli" -exec cp {} /usr/local/bin/ \;
-          sudo chmod +x /usr/local/bin/cutechess-cli
-          cutechess-cli --version
+          sudo apt-get install -y cutechess
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
@@ -67,7 +63,7 @@ jobs:
 
       - name: Run match
         run: |
-          GAMES=${{ inputs.games }}
+          GAMES=${{ inputs.games_per_shard }}
           HALF=$((GAMES / 2))
           cutechess-cli \
             -engine cmd=./dev_build/AnkaX name=Dev proto=uci \
@@ -81,11 +77,11 @@ jobs:
             -draw movenumber=30 movecount=5 score=10 \
             -maxmoves 200 \
             -concurrency 2 \
-            -pgnout result.pgn \
+            -pgnout result_${{ matrix.shard }}.pgn \
             -recover
 
       - name: Upload PGN
         uses: actions/upload-artifact@v4
         with:
-          name: match-pgn
-          path: result.pgn
+          name: match-pgn-shard-${{ matrix.shard }}
+          path: result_${{ matrix.shard }}.pgn
