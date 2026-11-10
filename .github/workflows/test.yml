@@ -16,10 +16,16 @@ jobs:
   test:
     runs-on: ubuntu-24.04
     steps:
-      - name: Install cutechess
+      - name: Build cutechess from source
         run: |
           sudo apt-get update
-          sudo apt-get install -y cutechess
+          sudo apt-get install -y qtbase5-dev
+          git clone --depth 1 https://github.com/cutechess/cutechess.git /tmp/cutechess
+          cd /tmp/cutechess
+          qmake
+          make -j$(nproc)
+          sudo cp projects/cli/cutechess-cli /usr/local/bin/
+          cutechess-cli --version
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
