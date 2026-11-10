@@ -590,6 +590,10 @@ public static class Search
                 return beta;
         }
 
+        // IIR: reduce depth when no TT move is available
+        if (depth >= 4 && ttMove == 0)
+            depth--;
+
         // Futility pruning
         bool canPrune = false;
         if (quietNode && depth <= FutilityMaxDepth)
@@ -735,7 +739,7 @@ public static class Search
                     TTFlag.Beta,
                     currentPly);
 
-                return beta;
+                return bestScore;
             }
 
             if (score > alpha)
@@ -773,7 +777,7 @@ public static class Search
         TTFlag flag = alpha <= originalAlpha ? TTFlag.Alpha : TTFlag.Exact;
         TranspositionTable.Store(hashKey, depth, alpha, bestMove, flag, currentPly);
 
-        return alpha;
+        return bestScore;
     }
 
     public static int Quiescence(int alpha, int beta)
@@ -802,7 +806,7 @@ public static class Search
             eval = Evaluation.Evaluate();
 
             if (eval >= beta)
-                return beta;
+                return eval;
 
             if (eval > alpha)
                 alpha = eval;
@@ -863,7 +867,7 @@ public static class Search
                 return 0;
 
             if (score >= beta)
-                return beta;
+                return score;
 
             if (score > alpha)
                 alpha = score;
