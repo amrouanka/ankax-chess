@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       baseline:
-        description: 'Baseline git tag (e.g. v1.0.4)'
+        description: 'Baseline git tag'
         required: true
         default: 'v1.0.4'
       games:
@@ -18,16 +18,8 @@ jobs:
     steps:
       - name: Install cutechess
         run: |
-          URL=$(curl -sL https://api.github.com/repos/cutechess/cutechess/releases/latest \
-            | grep "browser_download_url.*linux64" \
-            | head -1 \
-            | cut -d '"' -f 4)
-          echo "Downloading: $URL"
-          curl -L -o cutechess.tar.gz "$URL"
-          tar xzf cutechess.tar.gz
-          sudo cp cutechess-*/cutechess-cli /usr/local/bin/
-          chmod +x /usr/local/bin/cutechess-cli
-          cutechess-cli --version
+          sudo apt-get update
+          sudo apt-get install -y cutechess
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
@@ -35,7 +27,7 @@ jobs:
           dotnet-version: '10.0.x'
           dotnet-quality: 'preview'
 
-      - name: Checkout dev (current code)
+      - name: Checkout dev
         uses: actions/checkout@v4
         with:
           path: dev_src
