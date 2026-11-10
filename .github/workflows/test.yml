@@ -1,0 +1,75 @@
+name: Engine Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      baseline:
+        description: 'Baseline git tag (e.g. v1.0.4)'
+        required: true
+        default: 'v1.0.4'
+      games:
+        description: 'Number of games'
+        required: true
+        default: '4000'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Install cutechess-cli
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cutechess
+
+      - name: Build dev
+        uses: actions/checkout@v4
+      - run: |
+          dotnet publish -c Release -r linux-x64 \
+            --self-contained true \
+            -p:PublishSingleFile=true \
+            -p:PublishAot=false \
+            -o dev_build
+          chmod +x dev_build/AnkaX
+
+      - name: Build baseline
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.baseline }}
+          path: baseline_src
+      - run: |
+          dotnet publish baseline_src/AnkaX.csproj \
+            -c Release -r linux-x64 \
+            --self-contained true \
+            -p:PublishSingleFile=true \
+            -p:PublishAot=false \
+            -o baseline_build
+          chmod +x baseline_build/AnkaX
+
+      - name: Run match
+        run: |
+          cutechess-cli \
+            -engine cmd=./dev_build/AnkaX name=Dev \
+            -engine cmd=./baseline_build/AnkaX name=Base \
+            -each tc=3+0.05 \
+            -games ${{ inputs.games }} \
+            -concurrency 2 \
+            -rounds ${{ inputs.games }} \
+            -repeat 2 \
+            -openings file=dev_build/books/UHO_4060_v4.epd \
+              format=epd order=random plies=12 \
+            -resign movecount=3 score=400 \
+            -draw movenumber=30 movecount=5 score=10 \
+            -maxmoves 200 \
+            -pgnout result.pgn \
+            -recover
+
+      - name: Upload PGN
+        uses: actions/upload-artifact@v4
+        with:
+          name: match-pgn
+          path: result.pgn
