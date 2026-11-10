@@ -156,3 +156,7 @@ MIT — see [LICENSE](LICENSE).
 
 Contributions are welcome. Pull requests should include a clear description of
 the change and any relevant validation steps (perft results, self-play Elo).
+
+## Combine PGNs
+
+Get-ChildItem -Recurse -Filter "result_*.pgn" | Get-Content | Set-Content combined.pgn
