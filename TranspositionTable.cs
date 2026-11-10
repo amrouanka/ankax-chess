@@ -15,18 +15,17 @@ public struct TTEntry
     public TTFlag flag;     // Type of score (exact, upper, or lower bound)
     public int bestMove;    // Best move found from this position
 }
-/*
-    WHY do we need flags?
-    
-    In alpha-beta search:
-    - If score >= beta: we CUTOFF and return beta
-      But the REAL score might be even higher! So it's a LOWER bound.
-      
-    - If score <= alpha: the move was bad, we didn't improve
-      The REAL score might be even lower! So it's an UPPER bound.
-      
-    - If alpha < score < beta: we found the exact score!
-*/
+// WHY do we need flags?
+
+// In alpha-beta search:
+// - If score >= beta: we CUTOFF and return beta
+//   But the REAL score might be even higher! So it's a LOWER bound.
+
+// - If score <= alpha: the move was bad, we didn't improve
+//   The REAL score might be even lower! So it's an UPPER bound.
+
+// - If alpha < score < beta: we found the exact score!
+
 public static class TranspositionTable
 {
     // Table size must be a power of 2 for fast modulo with bitwise AND
@@ -54,21 +53,21 @@ public static class TranspositionTable
         // Adjust mate scores before storing (explained down)
         if (score > 48000) score += ply;
         else if (score < -48000) score -= ply;
-        /*
-        Why Mate Scores Need Special Treatment? Here's an example:
-        Depth 5 search: Found checkmate in 3 moves
-        Stored score: +49000 - 3 = +48997  ← relative to ROOT
 
-        Later, depth 3 search at ply=2:
-        Retrieved score: +48997
-        But now we're at ply 2, so "mate in 3" 
-        from root = "mate in 1" from here!
-        Correct score should be: +49000 - 1 = +48999
+        // Why Mate Scores Need Special Treatment? Here's an example:
+        // Depth 5 search: Found checkmate in 3 moves
+        // Stored score: +49000 - 3 = +48997  ← relative to ROOT
 
-        FIX:
-        When STORING: add ply    (convert from relative to absolute)
-        When READING: subtract ply (convert from absolute to relative)
-        */
+        // Later, depth 3 search at ply=2:
+        // Retrieved score: +48997
+        // But now we're at ply 2, so "mate in 3" 
+        // from root = "mate in 1" from here!
+        // Correct score should be: +49000 - 1 = +48999
+
+        // FIX:
+        // When STORING: add ply    (convert from relative to absolute)
+        // When READING: subtract ply (convert from absolute to relative)
+
         // Simple replacment strategy: always replace
         table[index] = new TTEntry
         {
@@ -83,15 +82,15 @@ public static class TranspositionTable
     // Probe(): Look if we've seen this position before
     public static int Probe(ulong hashkey, int depth, int alpha, int beta, int ply, out int ttMove)
     {
-        /*
-        The out keyword means "this parameter is a return value going OUT of the function". It lets a function return multiple values.
 
-        // Normal function: returns ONE thing
-        int Probe(...) → returns score
+        // The out keyword means "this parameter is a return value going OUT of the function". It lets a function return multiple values.
 
-        // With 'out': returns TWO things
-        int Probe(..., out int ttMove) → returns score AND ttMove
-        */
+        // -Normal function: returns ONE thing:
+        // int Probe(...) → returns score
+
+        // -With 'out': returns TWO things:
+        // int Probe(..., out int ttMove) → returns score AND ttMove
+
         ttMove = 0; // Default: no move found
 
         int index = (int)(hashkey & (TableSize - 1));
