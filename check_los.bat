@@ -1,6 +1,6 @@
 @echo off
 setlocal
-set "PGN=%~dp0dev_vs_release.pgn"
+set "PGN=%~dp0combined.pgn"
 
 if not exist "%PGN%" (
     echo.
