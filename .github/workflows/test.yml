@@ -14,15 +14,21 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     strategy:
       matrix:
         shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
     steps:
-      - name: Install cutechess
+      - name: Build cutechess from source
         run: |
           sudo apt-get update
-          sudo apt-get install -y cutechess
+          sudo apt-get install -y cmake qt6-base-dev qt6-svg-dev
+          git clone --depth 1 https://github.com/cutechess/cutechess.git /tmp/cutechess
+          cd /tmp/cutechess
+          cmake -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build -j$(nproc)
+          sudo find build -name "cutechess-cli" -exec cp {} /usr/local/bin/ \;
+          sudo chmod +x /usr/local/bin/cutechess-cli
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
