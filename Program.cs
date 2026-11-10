@@ -130,7 +130,7 @@ class Program
             // ── Setup time: 1 second ──────────────
             // Use the proper method — it sets BOTH softStopTime and stoptime
             TimeManagement.ResetForGo();
-            TimeManagement.StartMoveTimeSearch(1000);
+            TimeManagement.StartMoveTimeSearch(50);
 
             // ── Run search ────────────────────────
             Search.SearchPosition(64);

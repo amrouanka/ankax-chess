@@ -590,10 +590,6 @@ public static class Search
                 return beta;
         }
 
-        // IIR: reduce depth when no TT move is available
-        if (depth >= 4 && ttMove == 0)
-            depth--;
-
         // Futility pruning
         bool canPrune = false;
         if (quietNode && depth <= FutilityMaxDepth)
@@ -734,7 +730,7 @@ public static class Search
                 TranspositionTable.Store(
                     hashKey,
                     depth,
-                    beta,
+                    bestScore,
                     bestMove,
                     TTFlag.Beta,
                     currentPly);
@@ -775,7 +771,7 @@ public static class Search
         }
 
         TTFlag flag = alpha <= originalAlpha ? TTFlag.Alpha : TTFlag.Exact;
-        TranspositionTable.Store(hashKey, depth, alpha, bestMove, flag, currentPly);
+        TranspositionTable.Store(hashKey, depth, bestScore, bestMove, flag, currentPly);
 
         return bestScore;
     }
