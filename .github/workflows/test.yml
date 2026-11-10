@@ -25,7 +25,7 @@ jobs:
           cmake -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build -j$(nproc)
           sudo find build -name "cutechess-cli" -exec cp {} /usr/local/bin/ \;
-          chmod +x /usr/local/bin/cutechess-cli
+          sudo chmod +x /usr/local/bin/cutechess-cli
           cutechess-cli --version
 
       - name: Setup .NET
