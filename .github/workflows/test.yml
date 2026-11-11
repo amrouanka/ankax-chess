@@ -36,7 +36,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/cutechess-build/cutechess-cli
-          key: cutechess-ubuntu-24.04-v2
+          key: cutechess-ubuntu-24.04-v3
 
       - name: Build cutechess from source (cache miss only)
         if: steps.cache-cutechess.outputs.cache-hit != 'true'
@@ -50,8 +50,8 @@ jobs:
           git clone --depth 1 https://github.com/cutechess/cutechess.git
           cd cutechess
           mkdir build && cd build
-          cmake .. -DCMAKE_BUILD_TYPE=Release -DWITH_GUI=OFF
-          make -j$(nproc)
+          cmake .. -DCMAKE_BUILD_TYPE=Release
+          make -j$(nproc) cli
           mkdir -p ~/cutechess-build
           cp projects/cli/cutechess-cli ~/cutechess-build/cutechess-cli
 
