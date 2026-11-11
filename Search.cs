@@ -590,6 +590,9 @@ public static class Search
                 return beta;
         }
 
+        if (depth >= 4 && ttMove == 0 && !inCheck)
+            depth--;
+
         // Futility pruning
         bool canPrune = false;
         if (quietNode && depth <= FutilityMaxDepth)
