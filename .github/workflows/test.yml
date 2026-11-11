@@ -10,7 +10,7 @@ on:
       games_per_shard:
         description: 'Games per shard (must be even)'
         required: true
-        default: '1000'
+        default: '500'
 
 jobs:
   test:
