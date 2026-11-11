@@ -6,11 +6,11 @@ on:
       baseline:
         description: "Baseline git tag"
         required: true
-        default: "v1.0.5"
+        default: "v1.0.6"
       games_per_shard:
         description: "Games per shard (must be even)"
         required: true
-        default: "500"
+        default: "1000"
 
 jobs:
   test:
