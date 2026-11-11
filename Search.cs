@@ -593,7 +593,7 @@ public static class Search
         if (depth >= 4 && ttMove == 0 && !inCheck)
             depth--;
 
-        // Futility pruning
+        // Futility pruning 
         bool canPrune = false;
         if (quietNode && depth <= FutilityMaxDepth)
             canPrune = staticEval + FutilityMarginPerDepth * depth <= alpha;
