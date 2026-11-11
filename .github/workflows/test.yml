@@ -31,35 +31,22 @@ jobs:
             exit 1
           fi
 
-      - name: Fix apt mirrors (bypass broken Azure DNS)
-        run: |
-          sudo tee /etc/apt/sources.list.d/ubuntu.sources > /dev/null << 'EOF'
-          Types: deb
-          URIs: http://archive.ubuntu.com/ubuntu
-          Suites: noble noble-updates noble-backports
-          Components: main restricted universe multiverse
-
-          Types: deb
-          URIs: http://security.ubuntu.com/ubuntu
-          Suites: noble-security
-          Components: main restricted universe multiverse
-          EOF
-
-      - name: Install cutechess dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake qt6-base-dev qt6-svg-dev
-
       - name: Cache cutechess
         id: cache-cutechess
         uses: actions/cache@v4
         with:
           path: ~/cutechess-build/cutechess-cli
-          key: cutechess-ubuntu-24.04-v1
+          key: cutechess-ubuntu-24.04-v2
 
-      - name: Build cutechess from source
+      - name: Build cutechess from source (cache miss only)
         if: steps.cache-cutechess.outputs.cache-hit != 'true'
         run: |
+          for i in 1 2 3 4 5; do
+            sudo apt-get update && break
+            echo "apt-get update failed, retry $i in 15s..."
+            sleep 15
+          done
+          sudo apt-get install -y cmake qt6-base-dev qt6-svg-dev
           git clone --depth 1 https://github.com/cutechess/cutechess.git
           cd cutechess
           mkdir build && cd build
