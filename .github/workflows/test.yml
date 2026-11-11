@@ -6,7 +6,7 @@ on:
       baseline:
         description: "Baseline git tag"
         required: true
-        default: "v1.0.5"
+        default: "v1.0.6"
       time_control:
         description: "Time control (e.g. 3+0.05, 10+0.1, 15+0.25)"
         required: true
@@ -34,6 +34,11 @@ jobs:
             echo "games_per_shard must be a positive even number."
             exit 1
           fi
+
+      - name: Install Qt6 runtime libraries
+        run: |
+          sudo apt-get install -y --no-install-recommends \
+            libqt6core6t64 libqt6network6t64
 
       - name: Cache cutechess
         id: cache-cutechess
