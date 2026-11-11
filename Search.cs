@@ -312,7 +312,7 @@ public static class Search
 
         // Reusable buffer for UCI output (avoids per-iteration string allocations).
         // Null in debug mode since we never print UCI info then.
-        StringBuilder? infoBuilder = Program.debug ? null : new StringBuilder(256);
+        StringBuilder? infoBuilder = Program.Debug ? null : new StringBuilder(256);
 
         for (int currentDepth = 1; currentDepth <= depth; currentDepth++)
         {
@@ -415,7 +415,7 @@ public static class Search
             }
         }
 
-        if (Program.debug)
+        if (Program.Debug)
         {
             lastBestMove = bestMove;
             lastDepthReached = completedDepth;

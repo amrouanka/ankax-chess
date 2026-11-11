@@ -15,6 +15,7 @@ with all major chess GUIs.
 - **CCRL Blitz:** 2469 Elo (v1.0.2, [CCRL Blitz Rating List](https://www.computerchess.org.uk/ccrl/404/))
 - **v1.0.3:** +46 Elo over v1.0.2 (self-play, performance optimizations)
 - **v1.0.4:** +7 Elo over v1.0.3 (self-play, history heuristic improvements)
+- **v1.0.5:** +7 Elo over v1.0.4 (self-play, fail-soft search & IIR)
 
 > Self-play results measured at 3+0.05 using
 > [cutechess-cli](https://github.com/cutechess/cutechess) with the
@@ -28,7 +29,8 @@ with all major chess GUIs.
 - FEN parsing and move validation
 - Full UCI protocol support (`uci`, `isready`, `ucinewgame`, `position`, `go`, `stop`, `quit`)
 - Iterative deepening with aspiration windows
-- Principal Variation Search (PVS)
+- Principal Variation Search (PVS) with fail-soft return values
+- Internal Iterative Reductions (IIR)
 - Null move pruning with adaptive reduction
 - Late Move Reductions (LMR)
 - Reverse futility and futility pruning
@@ -70,7 +72,7 @@ The engine starts in UCI mode and waits for commands from standard input.
 
     > AnkaX.exe
     uci
-    id name AnkaX v1.0.4
+    id name AnkaX v1.0.5
     id author Amrou Louai Anka
     uciok
     isready
@@ -92,13 +94,25 @@ This repository includes scripts for automated self-play testing using
 2. Place an opening book in the `books/` directory. This project uses
    [UHO 4060 v4](https://www.sp-ohl.de/books/books.html) by Stefan Pohl.
 
-### Running a Match
+### Running a Match Locally
 
     run_match.bat
 
 This runs 10,000 games between the current dev build and the release build
 in `releases/AnkaX.exe`, using 3+0.05 time control with the UHO book.
 Results are saved to `dev_vs_release.pgn`.
+
+### Running a Match via GitHub Actions
+
+Trigger the **Engine Test** workflow from the Actions tab (or VSCode).
+It runs 20 parallel shards of 500 games each (10,000 total) on
+`ubuntu-24.04` runners, building both engines from source.
+
+After the run completes, download the PGN artifacts and combine them:
+
+```powershell
+Get-ChildItem -Recurse -Filter "result_*.pgn" | Get-Content | Set-Content dev_vs_release.pgn
+```
 
 ### Checking Results
 
@@ -109,26 +123,27 @@ Superiority (LOS).
 
 ## Project Structure
 
-| File / Directory | Description |
-| --- | --- |
-| `Program.cs` | Entry point, tactical test suite, perft driver |
-| `Uci.cs` | UCI protocol parser and engine loop |
-| `Board.cs` | Board state, FEN parsing, copy/takeback |
-| `MoveGenerator.cs` | Legal move generation and make-move |
-| `PieceAttacks.cs` | Attack tables (leapers, magic bitboards for sliders) |
-| `BitboardOperations.cs` | Bitboard helpers (popcount, LSB, set/pop bit) |
-| `Search.cs` | PVS alpha-beta search, quiescence, pruning, move ordering |
-| `Evaluation.cs` | Tapered evaluation with PeSTO PSTs and positional features |
-| `TranspositionTable.cs` | Hash table with Zobrist keying |
-| `Zobrist.cs` | Zobrist hash key generation |
-| `Move.cs` | Move encoding/decoding, move list, board state snapshot |
-| `TimeManagement.cs` | Search timing and clock management |
-| `Enums.cs` | Piece, square, castling, and flag constants |
-| `AnkaX.csproj` | .NET 10 project file |
-| `books/` | Opening books for self-play testing |
-| `releases/` | Published executables for version comparison |
-| `run_match.bat` | Automated self-play match script (cutechess-cli) |
-| `check_los.bat` | PGN result analyzer (Elo, LOS) |
+| File / Directory       | Description                                              |
+|------------------------|----------------------------------------------------------|
+| `Program.cs`           | Entry point, tactical test suite, perft driver           |
+| `Uci.cs`               | UCI protocol parser and engine loop                      |
+| `Board.cs`             | Board state, FEN parsing, copy/takeback                  |
+| `MoveGenerator.cs`     | Legal move generation and make-move                      |
+| `PieceAttacks.cs`      | Attack tables (leapers, magic bitboards for sliders)     |
+| `BitboardOperations.cs`| Bitboard helpers (popcount, LSB, set/pop bit)            |
+| `Search.cs`            | PVS alpha-beta search, quiescence, pruning, move ordering|
+| `Evaluation.cs`        | Tapered evaluation with PeSTO PSTs and positional features|
+| `TranspositionTable.cs`| Hash table with Zobrist keying                           |
+| `Zobrist.cs`           | Zobrist hash key generation                              |
+| `Move.cs`              | Move encoding/decoding, move list, board state snapshot  |
+| `TimeManagement.cs`    | Search timing and clock management                       |
+| `Enums.cs`             | Piece, square, castling, and flag constants              |
+| `AnkaX.csproj`         | .NET 10 project file                                     |
+| `.github/workflows/`   | GitHub Actions CI for automated self-play testing        |
+| `books/`               | Opening books for self-play testing                      |
+| `releases/`            | Published executables for version comparison             |
+| `run_match.bat`        | Automated self-play match script (cutechess-cli)         |
+| `check_los.bat`        | PGN result analyzer (Elo, LOS)                           |
 
 ## Development Notes
 
@@ -156,7 +171,3 @@ MIT — see [LICENSE](LICENSE).
 
 Contributions are welcome. Pull requests should include a clear description of
 the change and any relevant validation steps (perft results, self-play Elo).
-
-## Combine PGNs
-
-Get-ChildItem -Recurse -Filter "result_*.pgn" | Get-Content | Set-Content combined.pgn
