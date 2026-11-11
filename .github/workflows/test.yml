@@ -6,7 +6,7 @@ on:
       baseline:
         description: 'Baseline git tag'
         required: true
-        default: 'v1.0.4'
+        default: 'v1.0.5'
       games_per_shard:
         description: 'Games per shard (must be even)'
         required: true
