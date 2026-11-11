@@ -365,7 +365,7 @@ public static class Uci
         if (depth == -1)
             depth = MaxSearchDepth;
 
-        if (Program.debug)
+        if (Program.Debug)
         {
             Console.WriteLine(
                 $"info string start:{TimeManagement.starttime} " +
