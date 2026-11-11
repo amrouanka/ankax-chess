@@ -6,7 +6,11 @@ on:
       baseline:
         description: "Baseline git tag"
         required: true
-        default: "v1.0.6"
+        default: "v1.0.5"
+      time_control:
+        description: "Time control (e.g. 3+0.05, 10+0.1, 15+0.25)"
+        required: true
+        default: "3+0.05"
       games_per_shard:
         description: "Games per shard (must be even)"
         required: true
@@ -100,13 +104,14 @@ jobs:
       - name: Run match
         env:
           GAMES: ${{ inputs.games_per_shard }}
+          TC: ${{ inputs.time_control }}
         run: |
           HALF=$((10#$GAMES / 2))
 
           cutechess-cli \
             -engine cmd=./dev_build/AnkaX name=Dev proto=uci \
             -engine cmd=./base_build/AnkaX name=Base proto=uci \
-            -each tc=3+0.05 \
+            -each tc="$TC" \
             -games 2 -rounds "$HALF" \
             -repeat 2 \
             -openings file=dev_src/books/UHO_4060_v4.epd \
