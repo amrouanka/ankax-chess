@@ -31,6 +31,20 @@ jobs:
             exit 1
           fi
 
+      - name: Fix apt mirrors (bypass broken Azure DNS)
+        run: |
+          sudo tee /etc/apt/sources.list.d/ubuntu.sources > /dev/null << 'EOF'
+          Types: deb
+          URIs: http://archive.ubuntu.com/ubuntu
+          Suites: noble noble-updates noble-backports
+          Components: main restricted universe multiverse
+
+          Types: deb
+          URIs: http://security.ubuntu.com/ubuntu
+          Suites: noble-security
+          Components: main restricted universe multiverse
+          EOF
+
       - name: Install cutechess dependencies
         run: |
           sudo apt-get update
