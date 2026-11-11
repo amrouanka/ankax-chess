@@ -4,7 +4,7 @@ setlocal
 set "ANKAX_DEV=%~dp0bin\Release\net10.0\win-x64\publish\AnkaX.exe"
 set "ANKAX_RELEASE=%~dp0releases\AnkaX_1.0.5.exe"
 set "BOOK=%~dp0books\UHO_4060_v4.epd"
-set "PGN=%~dp0combined.pgn"
+set "PGN=%~dp0dev_vs_release.pgn"
 
 :: Cutechess must be installed separately [EDIT if different]
 set "CUTECHESS=C:\Program Files (x86)\Cute Chess\cutechess-cli.exe"
@@ -35,7 +35,7 @@ echo.
 "%CUTECHESS%" ^
     -engine name=AnkaX-Dev cmd="%ANKAX_DEV%" proto=uci ^
     -engine name=AnkaX cmd="%ANKAX_RELEASE%" proto=uci ^
-    -each tc=120+1 ^
+    -each tc=3+0.05 ^
     -openings file="%BOOK%" format=epd order=random plies=12 ^
     -games 10000 -concurrency 4 -repeat -recover ^
     -resign movecount=3 score=400 ^
@@ -46,6 +46,6 @@ echo.
 echo.
 echo ============================================
 echo   Match complete.
-echo   PGN saved as combined.pgn
+echo   PGN saved as dev_vs_release.pgn
 echo ============================================
 pause
