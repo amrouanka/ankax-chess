@@ -36,7 +36,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/cutechess-build/cutechess-cli
-          key: cutechess-ubuntu-24.04-v3
+          key: cutechess-ubuntu-24.04-v4
 
       - name: Build cutechess from source (cache miss only)
         if: steps.cache-cutechess.outputs.cache-hit != 'true'
@@ -53,7 +53,8 @@ jobs:
           cmake .. -DCMAKE_BUILD_TYPE=Release
           make -j$(nproc) cli
           mkdir -p ~/cutechess-build
-          cp projects/cli/cutechess-cli ~/cutechess-build/cutechess-cli
+          find . -name cutechess-cli -type f -exec cp {} ~/cutechess-build/cutechess-cli \;
+          test -f ~/cutechess-build/cutechess-cli || { echo "Binary not found!"; exit 1; }
 
       - name: Install cutechess
         run: |
