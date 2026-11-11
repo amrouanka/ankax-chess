@@ -4,37 +4,65 @@ on:
   workflow_dispatch:
     inputs:
       baseline:
-        description: 'Baseline git tag'
+        description: "Baseline git tag"
         required: true
-        default: 'v1.0.5'
+        default: "v1.0.5"
       games_per_shard:
-        description: 'Games per shard (must be even)'
+        description: "Games per shard (must be even)"
         required: true
-        default: '500'
+        default: "500"
 
 jobs:
   test:
     runs-on: ubuntu-24.04
+
     strategy:
+      fail-fast: false
       matrix:
         shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+
     steps:
-      - name: Build cutechess from source
+      - name: Validate game count
+        env:
+          GAMES: ${{ inputs.games_per_shard }}
+        run: |
+          if [[ ! "$GAMES" =~ ^[1-9][0-9]{0,4}$ ]] || (( 10#$GAMES % 2 != 0 )); then
+            echo "games_per_shard must be a positive even number."
+            exit 1
+          fi
+
+      - name: Install cutechess dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake qt6-base-dev qt6-svg-dev
-          git clone --depth 1 https://github.com/cutechess/cutechess.git /tmp/cutechess
-          cd /tmp/cutechess
-          cmake -B build -DCMAKE_BUILD_TYPE=Release
-          cmake --build build -j$(nproc)
-          sudo find build -name "cutechess-cli" -exec cp {} /usr/local/bin/ \;
+
+      - name: Cache cutechess
+        id: cache-cutechess
+        uses: actions/cache@v4
+        with:
+          path: ~/cutechess-build/cutechess-cli
+          key: cutechess-ubuntu-24.04-v1
+
+      - name: Build cutechess from source
+        if: steps.cache-cutechess.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 https://github.com/cutechess/cutechess.git
+          cd cutechess
+          mkdir build && cd build
+          cmake .. -DCMAKE_BUILD_TYPE=Release -DWITH_GUI=OFF
+          make -j$(nproc)
+          mkdir -p ~/cutechess-build
+          cp projects/cli/cutechess-cli ~/cutechess-build/cutechess-cli
+
+      - name: Install cutechess
+        run: |
+          sudo cp ~/cutechess-build/cutechess-cli /usr/local/bin/
           sudo chmod +x /usr/local/bin/cutechess-cli
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '10.0.x'
-          dotnet-quality: 'preview'
+          dotnet-version: "10.0.x"
 
       - name: Checkout dev
         uses: actions/checkout@v4
@@ -68,14 +96,16 @@ jobs:
           chmod +x base_build/AnkaX
 
       - name: Run match
+        env:
+          GAMES: ${{ inputs.games_per_shard }}
         run: |
-          GAMES=${{ inputs.games_per_shard }}
-          HALF=$((GAMES / 2))
+          HALF=$((10#$GAMES / 2))
+
           cutechess-cli \
             -engine cmd=./dev_build/AnkaX name=Dev proto=uci \
             -engine cmd=./base_build/AnkaX name=Base proto=uci \
             -each tc=3+0.05 \
-            -games 2 -rounds $HALF \
+            -games 2 -rounds "$HALF" \
             -repeat 2 \
             -openings file=dev_src/books/UHO_4060_v4.epd \
               format=epd order=random plies=12 \
