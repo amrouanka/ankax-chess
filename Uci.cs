@@ -38,7 +38,7 @@ public static class Uci
     //  Constants
     // =========================================================================
 
-    private const string EngineName = "AnkaX v1.0.5";
+    private const string EngineName = "AnkaX v1.0.6";
     private const string EngineAuthor = "Amrou Louai Anka";
 
     // Reusable move list for ParseMove (avoids heap allocation per call).

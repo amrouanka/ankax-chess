@@ -6,15 +6,15 @@ on:
       baseline:
         description: "Baseline git tag"
         required: true
-        default: "v1.0.5"
+        default: "v1.0.6"
       time_control:
         description: "Time control (e.g. 3+0.05, 10+0.1, 15+0.25)"
         required: true
-        default: "120+1"
+        default: "3+0.05"
       games_per_shard:
         description: "Games per shard (must be even)"
         required: true
-        default: "1000"
+        default: "500"
 
 jobs:
   test:
