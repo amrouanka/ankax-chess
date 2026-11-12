@@ -112,7 +112,7 @@ It runs 20 parallel shards of 250 games each (5,000 total) at 10+0.1 on
 After the run completes, download the PGN artifacts and combine them:
 
 ```powershell
-Get-ChildItem -Recurse -Filter "result_*.pgn" | Get-Content | Set-Content dev_vs_release.pgn
+Get-ChildItem -Recurse -Filter "result_*.pgn" | Get-Content | Set-Content scripts\dev_vs_release.pgn; & .\scripts\check_los.bat
 ```
 
 ### Checking Results
