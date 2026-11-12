@@ -12,7 +12,7 @@ using static MoveGenerator;
 //    ✓ Iterative deepening with aspiration windows
 //    ✓ Principal Variation Search (PVS)
 //    ✓ Null Move Pruning (NMP) with adaptive reduction
-//    ✓ Late Move Reductions (LMR) with PV reduction
+//    ✓ Late Move Reductions (LMR) with history-based adjustment
 //    ✓ Reverse futility pruning (static eval well above beta)
 //    ✓ Futility pruning (static eval well below alpha)
 //    ✓ Check extensions
@@ -59,6 +59,14 @@ public static class Search
     private const int ReductionLimit = 3;   // Minimum depth for LMR
     private const int LmrBase = 1;
     private const int LmrDivisor = 2;
+
+    // History-based LMR adjustment:
+    //   Good history → reduce less (trust the move ordering)
+    //   Bad history  → reduce more (the move is likely bad)
+    // Asymmetric: allow larger reduction increase than decrease,
+    // because wasting time on a good move is cheaper than missing a bad one.
+    private const int HistoryReductionDivisor = 2048;
+    private const int MaxHistoryReduction = 2;
 
     #endregion
 
@@ -649,6 +657,20 @@ public static class Search
 
                     if (pvNode && reduction > 1)
                         reduction--;
+
+                    // History-based LMR: good history → reduce less, bad → reduce more.
+                    // History is clamped ±7000 by the gravity formula.
+                    // /2048 gives a range of roughly ±3.
+                    // Asymmetric cap: allow up to +2 extra reduction for bad history,
+                    // but up to -3 for good history (don't over-reduce good moves).
+                    int historyScore = historyMoves[(GetMovePiece(move) << HistoryShift) | GetMoveTarget(move)];
+                    if (historyScore > 0)
+                        reduction -= historyScore / HistoryReductionDivisor;
+                    else
+                        reduction += Math.Min(-historyScore / HistoryReductionDivisor, MaxHistoryReduction);
+
+                    if (reduction < 0) reduction = 0;
+                    if (reduction > newDepth - 1) reduction = newDepth - 1;
 
                     score = -AlphaBeta(-alpha - 1, -alpha, newDepth - reduction);
                 }
