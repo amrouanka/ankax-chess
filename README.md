@@ -91,13 +91,13 @@ This repository includes scripts for automated self-play testing using
 ### Prerequisites
 
 1. Install [cutechess-cli](https://github.com/cutechess/cutechess/releases)
-   and update the `CUTECHESS` path in `run_match.bat` if needed.
+   and update the `CUTECHESS` path in `scripts/run_match.bat` if needed.
 2. Place an opening book in the `books/` directory. This project uses
    [UHO 4060 v4](https://www.sp-ohl.de/books/books.html) by Stefan Pohl.
 
 ### Running a Match Locally
 
-    run_match.bat
+    scripts/run_match.bat
 
 This runs 10,000 games between the current dev build and the release build
 in `releases/AnkaX.exe`, using 3+0.05 time control with the UHO book.
@@ -117,34 +117,35 @@ Get-ChildItem -Recurse -Filter "result_*.pgn" | Get-Content | Set-Content dev_vs
 
 ### Checking Results
 
-    check_los.bat
+    scripts/check_los.bat
 
 Parses the PGN and displays Elo difference, error margin, and Likelihood of
 Superiority (LOS).
 
 ## Project Structure
 
-| File / Directory       | Description                                              |
-|------------------------|----------------------------------------------------------|
-| `Program.cs`           | Entry point, tactical test suite, perft driver           |
-| `Uci.cs`               | UCI protocol parser and engine loop                      |
-| `Board.cs`             | Board state, FEN parsing, copy/takeback                  |
-| `MoveGenerator.cs`     | Legal move generation and make-move                      |
-| `PieceAttacks.cs`      | Attack tables (leapers, magic bitboards for sliders)     |
-| `BitboardOperations.cs`| Bitboard helpers (popcount, LSB, set/pop bit)            |
-| `Search.cs`            | PVS alpha-beta search, quiescence, pruning, move ordering|
+| File / Directory       | Description                                               |
+|------------------------|-----------------------------------------------------------|
+| `Program.cs`           | Entry point, tactical test suite, perft driver            |
+| `Uci.cs`               | UCI protocol parser and engine loop                       |
+| `Board.cs`             | Board state, FEN parsing, copy/takeback                   |
+| `MoveGenerator.cs`     | Legal move generation and make-move                       |
+| `PieceAttacks.cs`      | Attack tables (leapers, magic bitboards for sliders)      |
+| `BitboardOperations.cs`| Bitboard helpers (popcount, LSB, set/pop bit)             |
+| `Search.cs`            | PVS alpha-beta search, quiescence, pruning, move ordering |
 | `Evaluation.cs`        | Tapered evaluation with PeSTO PSTs and positional features|
-| `TranspositionTable.cs`| Hash table with Zobrist keying                           |
-| `Zobrist.cs`           | Zobrist hash key generation                              |
-| `Move.cs`              | Move encoding/decoding, move list, board state snapshot  |
-| `TimeManagement.cs`    | Search timing and clock management                       |
-| `Enums.cs`             | Piece, square, castling, and flag constants              |
-| `AnkaX.csproj`         | .NET 10 project file                                     |
-| `.github/workflows/`   | GitHub Actions CI for automated self-play testing        |
-| `books/`               | Opening books for self-play testing                      |
-| `releases/`            | Published executables for version comparison             |
-| `run_match.bat`        | Automated self-play match script (cutechess-cli)         |
-| `check_los.bat`        | PGN result analyzer (Elo, LOS)                           |
+| `TranspositionTable.cs`| Hash table with Zobrist keying                            |
+| `Zobrist.cs`           | Zobrist hash key generation                               |
+| `Move.cs`              | Move encoding/decoding, move list, board state snapshot   |
+| `TimeManagement.cs`    | Search timing and clock management                        |
+| `Enums.cs`             | Piece, square, castling, and flag constants               |
+| `AnkaX.csproj`         | .NET 10 project file                                      |
+| `.github/workflows/`   | GitHub Actions CI for automated self-play testing         |
+| `books/`               | Opening books for self-play testing                       |
+| `releases/`            | Published executables for version comparison              |
+| `scripts/run_match.bat`| Automated self-play match script (cutechess-cli)          |
+| `scripts/check_los.bat`| PGN result analyzer (Elo, LOS)                            |
+| `SEARCH.md`            | Technical documentation of the search                     |
 
 ## Development Notes
 
