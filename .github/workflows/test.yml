@@ -8,13 +8,13 @@ on:
         required: true
         default: "v1.0.6"
       time_control:
-        description: "Time control (e.g. 3+0.05, 10+0.1, 15+0.25)"
+        description: "Time control in seconds (e.g. 10+0.1, 60+0.6, 120+1)"
         required: true
-        default: "3+0.05"
+        default: "10+0.1"
       games_per_shard:
         description: "Games per shard (must be even)"
         required: true
-        default: "500"
+        default: "250"
 
 jobs:
   test:
