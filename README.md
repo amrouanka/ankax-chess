@@ -106,7 +106,7 @@ Results are saved to `dev_vs_release.pgn`.
 ### Running a Match via GitHub Actions
 
 Trigger the **Engine Test** workflow from the Actions tab (or VSCode).
-It runs 20 parallel shards of 500 games each (10,000 total) on
+It runs 20 parallel shards of 250 games each (5,000 total) at 10+0.1 on
 `ubuntu-24.04` runners, building both engines from source.
 
 After the run completes, download the PGN artifacts and combine them:
