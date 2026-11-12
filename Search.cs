@@ -65,7 +65,7 @@ public static class Search
     //   Bad history  → reduce more (the move is likely bad)
     // Asymmetric: allow larger reduction increase than decrease,
     // because wasting time on a good move is cheaper than missing a bad one.
-    private const int HistoryReductionDivisor = 2048;
+    private const int HistoryReductionDivisor = 4096;
     private const int MaxHistoryReduction = 2;
 
     #endregion
