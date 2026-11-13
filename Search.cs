@@ -12,11 +12,12 @@ using static MoveGenerator;
 //    ✓ Iterative deepening with aspiration windows
 //    ✓ Principal Variation Search (PVS)
 //    ✓ Null Move Pruning (NMP) with adaptive reduction
-//    ✓ Late Move Reductions (LMR) with history-based adjustment
+//    ✓ Late Move Reductions (LMR) with improving-based adjustment
 //    ✓ Reverse futility pruning (static eval well above beta)
 //    ✓ Futility pruning (static eval well below alpha)
 //    ✓ Check extensions
 //    ✓ Internal Iterative Reduction (IIR) when no TT move
+//    ✓ Improving flag (tightens pruning when position is worsening)
 //    ✓ Mate distance pruning
 //    ✓ Quiescence search with delta pruning
 //    ✓ Fail-soft return values
@@ -60,14 +61,6 @@ public static class Search
     private const int LmrBase = 1;
     private const int LmrDivisor = 2;
 
-    // History-based LMR adjustment:
-    //   Good history → reduce less (trust the move ordering)
-    //   Bad history  → reduce more (the move is likely bad)
-    // Asymmetric: allow larger reduction increase than decrease,
-    // because wasting time on a good move is cheaper than missing a bad one.
-    private const int HistoryReductionDivisor = 4096;
-    private const int MaxHistoryReduction = 2;
-
     #endregion
 
     #region Aspiration Windows
@@ -82,9 +75,11 @@ public static class Search
 
     private const int ReverseFutilityMaxDepth = 4;
     private const int ReverseFutilityMarginPerDepth = 110;
+    private const int ReverseFutilityImprovingBonus = 50;  // Extra margin when !improving
 
     private const int FutilityMaxDepth = 4;
     private const int FutilityMarginPerDepth = 120;
+    private const int FutilityImprovingPenalty = 30;       // Reduced margin when !improving
 
     #endregion
 
@@ -161,6 +156,9 @@ public static class Search
 
     // History heuristic: historyMoves[(piece << 6) | targetSquare]
     private static readonly int[] historyMoves = new int[12 << HistoryShift];
+
+    // Static eval per ply: used by the improving flag to compare with ply-2.
+    private static readonly int[] staticEvalStack = new int[MaxPly + 2];
 
     // Pre-allocated move lists (one per ply). Eliminates heap allocation in search.
     private static readonly MoveList[] moveLists = new MoveList[MaxPly + 2];
@@ -312,6 +310,7 @@ public static class Search
         Array.Clear(pvLength, 0, pvLength.Length);
         Array.Clear(killerMoves, 0, killerMoves.Length);
         Array.Clear(historyMoves, 0, historyMoves.Length);
+        Array.Clear(staticEvalStack, 0, staticEvalStack.Length);
 
         int alpha = -Infinity;
         int beta = Infinity;
@@ -440,7 +439,7 @@ public static class Search
 
     /// <summary>
     /// Principal Variation Search with null move pruning, LMR, futility pruning,
-    /// reverse futility pruning, check extensions, and IIR.
+    /// reverse futility pruning, check extensions, IIR, and improving flag.
     /// Returns fail-soft scores (actual best, not clamped to alpha/beta).
     /// </summary>
     private static int AlphaBeta(int alpha, int beta, int depth, bool allowNullMove = true)
@@ -509,6 +508,13 @@ public static class Search
 
         // --- Static evaluation ---
         int staticEval = inCheck ? -MateScore : Evaluation.Evaluate();
+        staticEvalStack[currentPly] = staticEval;
+
+        // Improving flag: is the position better than 2 plies ago?
+        // When in check or at low ply (no data), default to true (don't tighten pruning).
+        // When NOT improving, the position is deteriorating → prune more cautiously
+        // in RFP/futility, but reduce late moves more aggressively in LMR.
+        bool improving = inCheck || currentPly < 2 || staticEval > staticEvalStack[currentPly - 2];
 
         // Branchless combined predicates (& instead of && avoids branch misprediction)
         bool quietNode = !pvNode & !inCheck;
@@ -520,7 +526,10 @@ public static class Search
             staticEval > -MateThreshold &&
             staticEval < MateThreshold)
         {
-            if (staticEval - ReverseFutilityMarginPerDepth * depth >= beta)
+            int rfpMargin = ReverseFutilityMarginPerDepth * depth;
+            if (!improving) rfpMargin += ReverseFutilityImprovingBonus;
+
+            if (staticEval - rfpMargin >= beta)
                 return beta;
         }
 
@@ -572,7 +581,12 @@ public static class Search
         // --- Futility pruning ---
         bool canPrune = false;
         if (quietNode && depth <= FutilityMaxDepth)
-            canPrune = staticEval + FutilityMarginPerDepth * depth <= alpha;
+        {
+            int futilityMargin = FutilityMarginPerDepth * depth;
+            if (!improving) futilityMargin -= FutilityImprovingPenalty;
+
+            canPrune = staticEval + futilityMargin <= alpha;
+        }
 
         // --- Generate and sort moves ---
         ref MoveList moveList = ref moveLists[currentPly];
@@ -655,19 +669,13 @@ public static class Search
                     int moveIndex = movesSearched < 64 ? movesSearched : 63;
                     int reduction = lmrTable[lmrRowBase + moveIndex];
 
+                    // Reduce less in PV nodes (the PV matters more)
                     if (pvNode && reduction > 1)
                         reduction--;
 
-                    // History-based LMR: good history → reduce less, bad → reduce more.
-                    // History is clamped ±7000 by the gravity formula.
-                    // /2048 gives a range of roughly ±3.
-                    // Asymmetric cap: allow up to +2 extra reduction for bad history,
-                    // but up to -3 for good history (don't over-reduce good moves).
-                    int historyScore = historyMoves[(GetMovePiece(move) << HistoryShift) | GetMoveTarget(move)];
-                    if (historyScore > 0)
-                        reduction -= historyScore / HistoryReductionDivisor;
-                    else
-                        reduction += Math.Min(-historyScore / HistoryReductionDivisor, MaxHistoryReduction);
+                    // Reduce more when position is worsening (focus on best moves)
+                    if (!improving)
+                        reduction++;
 
                     if (reduction < 0) reduction = 0;
                     if (reduction > newDepth - 1) reduction = newDepth - 1;
