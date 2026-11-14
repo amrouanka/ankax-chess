@@ -514,7 +514,6 @@ public static class Search
 
         // --- Transposition table probe ---
         ulong hashKey = Zobrist.hashKey;
-        int sideToMove = side;
 
         int ttMove = 0;
         int ttScore = TranspositionTable.Probe(
@@ -545,7 +544,7 @@ public static class Search
             depth >= NullMoveMinDepth &&
             allowNullMove &&
             staticEval >= beta &&
-            HasNonPawnMaterial(sideToMove))
+            HasNonPawnMaterial(side))
         {
             BoardState nullMoveState = CopyBoard();
 
@@ -593,7 +592,8 @@ public static class Search
         // --- Parent move lookup (counter-move + continuation history) ---
         // The parent's move is at moveStack[currentPly - 1]. From it we derive:
         //   counterMove    — our stored refutation (one specific move)
-        //   prevContIndex  — key for continuation history scores across all replies
+        //   prevContIndex    — key for counter-move table lookup
+        //   prevContRowBase  — pre-multiplied base for continuation history indexing
         // Both are used in move ordering and LMR. Skipped at root (no parent).
         int prevMove = currentPly > 0 ? moveStack[currentPly - 1] : 0;
         int counterMove = 0;
@@ -620,8 +620,7 @@ public static class Search
             killerMoves[killerIndex],
             killerMoves[killerIndex + 1],
             counterMove,
-            prevContRowBase,
-            sideToMove);
+            prevContRowBase);
 
         int[] moves = moveList.moves;
         int moveCount = moveList.count;
@@ -861,8 +860,7 @@ public static class Search
             killerMoves[killerIndex],
             killerMoves[killerIndex + 1],
             0,
-            -1,
-            side);
+            -1);
 
         int[] moves = moveList.moves;
         int moveCount = moveList.count;
@@ -931,15 +929,14 @@ public static class Search
         int killer1,
         int killer2,
         int counterMove,
-        int prevContRowBase,
-        int sideToMove)
+        int prevContRowBase)
     {
         int count = moveList.count;
         if (count < 2)
         {
             if (count == 1)
                 moveList.scores[0] = ScoreMove(
-                    moveList.moves[0], ttMove, pvMove, killer1, killer2, counterMove, prevContRowBase, sideToMove);
+                    moveList.moves[0], ttMove, pvMove, killer1, killer2, counterMove, prevContRowBase);
             return;
         }
 
@@ -948,7 +945,7 @@ public static class Search
         Span<int> scores = moveList.scores.AsSpan(0, count);
 
         for (int i = 0; i < count; i++)
-            scores[i] = ScoreMove(moves[i], ttMove, pvMove, killer1, killer2, counterMove, prevContRowBase, sideToMove);
+            scores[i] = ScoreMove(moves[i], ttMove, pvMove, killer1, killer2, counterMove, prevContRowBase);
 
         // Insertion sort with early-exit: skip elements already in order.
         // Move lists are partially ordered (TT/captures cluster at front),
@@ -986,8 +983,7 @@ public static class Search
         int killer1,
         int killer2,
         int counterMove,
-        int prevContRowBase,
-        int sideToMove)
+        int prevContRowBase)
     {
         if (move == ttMove) return 30000;
 
