@@ -661,7 +661,7 @@ public static class Search
             // Late Move Pruning: skip quiet moves after enough moves searched.
             // At shallow depth, if our ordering is good, moves beyond 3+d² are noise.
             // Guard: non-PV, not in check, non-mate score (don't prune when losing).
-            if (depth <= 4 &&
+            if (depth <= 2 &&
                 !pvNode &&
                 !inCheck &&
                 isQuiet &&
