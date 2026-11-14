@@ -658,6 +658,20 @@ public static class Search
                 continue;
             }
 
+            // Late Move Pruning: skip quiet moves after enough moves searched.
+            // At shallow depth, if our ordering is good, moves beyond 3+d² are noise.
+            // Guard: non-PV, not in check, non-mate score (don't prune when losing).
+            if (depth <= 4 &&
+                !pvNode &&
+                !inCheck &&
+                isQuiet &&
+                movesSearched >= 3 + depth * depth &&
+                bestScore > -MateThreshold)
+            {
+                anyMovePruned = true;
+                continue;
+            }
+
             // Make move and check legality
             BoardState state = CopyBoard();
             if (MakeMove(move, AllMoves) == 0)
