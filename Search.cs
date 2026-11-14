@@ -19,14 +19,13 @@ using static MoveGenerator;
 //    ✓ Internal Iterative Reduction (IIR) when no TT move
 //    ✓ Counter-move history (best response to opponent's previous move)
 //    ✓ Continuation history (score-based follow-up to opponent's move)
-//    ✓ Capture history (score-based ordering for captures)
 //    ✓ Mate distance pruning
 //    ✓ Quiescence search with delta pruning
 //    ✓ Fail-soft return values
 //
 //  Move ordering (highest to lowest priority):
 //    TT move (30000) → Q-promotion (29000) → PV move (20000) →
-//    MVV-LVA + Capture history (10000+) → Killer 1 (9000) → Killer 2 (8000) →
+//    MVV-LVA (10000+) → Killer 1 (9000) → Killer 2 (8000) →
 //    Counter-move (7800) → Castling (7500) → Other promotions (7200) →
 //    History + Continuation (-7000..+7000)
 //
@@ -169,11 +168,6 @@ public static class Search
     // replies (currIndex) performed. Uses same gravity formula as regular history.
     // 768 × 768 = 589,824 ints ≈ 2.3 MB, fits in L2 cache.
     private static readonly int[] contHistory = new int[768 * 768];
-
-    // Capture history: captureHistory[(piece * 64 + target) * 6 + victimType] = score.
-    // Tracks how well each capture (piece × target × victim type) performed.
-    // 12 × 64 × 6 = 4,608 ints ≈ 18 KB, always in L1 cache.
-    private static readonly int[] captureHistory = new int[12 * 64 * 6];
 
     // Move stack: moveStack[ply] = move played at this ply. Needed so child nodes
     // can look up their parent's move to index counterMoves and contHistory.
@@ -332,7 +326,6 @@ public static class Search
         Array.Clear(historyMoves, 0, historyMoves.Length);
         Array.Clear(counterMoves, 0, counterMoves.Length);
         Array.Clear(contHistory, 0, contHistory.Length);
-        Array.Clear(captureHistory, 0, captureHistory.Length);
         Array.Clear(moveStack, 0, moveStack.Length);
 
         int alpha = -Infinity;
@@ -463,7 +456,7 @@ public static class Search
     /// <summary>
     /// Principal Variation Search with null move pruning, LMR, futility pruning,
     /// reverse futility pruning, check extensions, IIR, counter-move history,
-    /// and continuation history, and capture history.
+    /// and continuation history.
     /// Returns fail-soft scores (actual best, not clamped to alpha/beta).
     /// </summary>
     private static int AlphaBeta(int alpha, int beta, int depth, bool allowNullMove = true)
@@ -759,10 +752,6 @@ public static class Search
                     if (prevContIndex >= 0)
                         counterMoves[prevContIndex] = move;
                 }
-                else if (GetMoveCapture(move) != 0)
-                {
-                    UpdateCaptureHistory(move, depthSquared);
-                }
 
                 TranspositionTable.Store(
                     hashKey, depth, bestScore, bestMove, TTFlag.Beta, currentPly);
@@ -779,10 +768,6 @@ public static class Search
 
                     if (prevContRowBase >= 0)
                         UpdateContHistory(prevContRowBase, move, depthSquared);
-                }
-                else if (GetMoveCapture(move) != 0)
-                {
-                    UpdateCaptureHistory(move, depthSquared);
                 }
 
                 alpha = score;
@@ -1016,9 +1001,7 @@ public static class Search
         {
             int piece = GetMovePiece(move);
             int victim = GetPieceAtSquare(target);
-            int victimType = victim % 6;
-            int capHist = captureHistory[((piece << 6) + target) * 6 + victimType];
-            return mvvLvaTable[(piece << PieceShift) | victim] + 10000 + capHist;
+            return mvvLvaTable[(piece << PieceShift) | victim] + 10000;
         }
 
         if (move == killer1) return 9000;
@@ -1063,16 +1046,6 @@ public static class Search
         int currIndex = (GetMovePiece(move) << HistoryShift) | GetMoveTarget(move);
         int idx = prevRowBase + currIndex;
         contHistory[idx] += bonus - contHistory[idx] * Math.Abs(bonus) / MaxHistory;
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static void UpdateCaptureHistory(int move, int bonus)
-    {
-        int target = GetMoveTarget(move);
-        int victim = GetPieceAtSquare(target);
-        int victimType = victim % 6;
-        int idx = (GetMovePiece(move) * 64 + target) * 6 + victimType;
-        captureHistory[idx] += bonus - captureHistory[idx] * Math.Abs(bonus) / MaxHistory;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
