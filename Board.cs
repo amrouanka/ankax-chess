@@ -1,6 +1,27 @@
 using static CastlingRights;
 using static Square;
 using static MoveGenerator;
+using System.Numerics;
+
+// =============================================================================
+//  Bitboard helpers — inlined here since they're tiny and used everywhere.
+//  All methods delegate to hardware intrinsics (POPCNT, TZCNT) via BitOperations.
+// =============================================================================
+
+public static class BitboardOperations
+{
+    public static void SetBit(ref ulong bitboard, int square) => bitboard |= 1UL << square;
+    public static bool GetBit(ulong bitboard, int square) => (bitboard & (1UL << square)) != 0;
+    public static void PopBit(ref ulong bitboard, int square) => bitboard &= ~(1UL << square);
+
+    public static int CountBits(ulong bitboard) => BitOperations.PopCount(bitboard);
+
+    public static int GetLs1bIndex(ulong bitboard) => BitOperations.TrailingZeroCount(bitboard);
+}
+
+// =============================================================================
+//  Board state, FEN parsing, copy/takeback, debug printing
+// =============================================================================
 
 public static class Board
 {
@@ -8,6 +29,7 @@ public static class Board
     public const int p = 6, n = 7, b = 8, r = 9, q = 10, k = 11;
 
     public static readonly char[] asciiPieces = "PNBRQKpnbrqk".ToCharArray();
+
     public static readonly Dictionary<char, int> charPieces = new()
     {
         ['P'] = P,
@@ -26,8 +48,8 @@ public static class Board
 
     public static readonly char[] promotedPieces =
     [
-        ' ', 'n', 'b', 'r', 'q', ' ',  // P, N, B, R, Q, K (white pieces)
-        ' ', 'n', 'b', 'r', 'q', ' '   // p, n, b, r, q, k (black pieces)
+        ' ', 'n', 'b', 'r', 'q', ' ',   // white pieces P..K
+        ' ', 'n', 'b', 'r', 'q', ' '    // black pieces p..k
     ];
 
     public static readonly string[] squareToCoordinates =
@@ -48,6 +70,10 @@ public static class Board
     public static int enPassant = (int)noSquare;
     public static int castle;
     public static int halfmoveClock = 0;
+
+    // =========================================================================
+    //  FEN Parsing
+    // =========================================================================
 
     public static void ParseFEN(string fen)
     {
@@ -119,26 +145,26 @@ public static class Board
         Zobrist.hashKey = Zobrist.GenerateHashKey();
     }
 
+    // =========================================================================
+    //  Occupancy
+    // =========================================================================
+
     public static void UpdateOccupancies()
     {
         occupancies[White] =
-            bitboards[P] |
-            bitboards[N] |
-            bitboards[B] |
-            bitboards[R] |
-            bitboards[Q] |
-            bitboards[K];
+            bitboards[P] | bitboards[N] | bitboards[B] |
+            bitboards[R] | bitboards[Q] | bitboards[K];
 
         occupancies[Black] =
-            bitboards[p] |
-            bitboards[n] |
-            bitboards[b] |
-            bitboards[r] |
-            bitboards[q] |
-            bitboards[k];
+            bitboards[p] | bitboards[n] | bitboards[b] |
+            bitboards[r] | bitboards[q] | bitboards[k];
 
         occupancies[Both] = occupancies[White] | occupancies[Black];
     }
+
+    // =========================================================================
+    //  Copy / TakeBack
+    // =========================================================================
 
     public static BoardState CopyBoard()
     {
@@ -172,18 +198,12 @@ public static class Board
 
     public static void TakeBack(BoardState state)
     {
-        bitboards[0] = state.bb0;
-        bitboards[1] = state.bb1;
-        bitboards[2] = state.bb2;
-        bitboards[3] = state.bb3;
-        bitboards[4] = state.bb4;
-        bitboards[5] = state.bb5;
-        bitboards[6] = state.bb6;
-        bitboards[7] = state.bb7;
-        bitboards[8] = state.bb8;
-        bitboards[9] = state.bb9;
-        bitboards[10] = state.bb10;
-        bitboards[11] = state.bb11;
+        bitboards[0] = state.bb0; bitboards[1] = state.bb1;
+        bitboards[2] = state.bb2; bitboards[3] = state.bb3;
+        bitboards[4] = state.bb4; bitboards[5] = state.bb5;
+        bitboards[6] = state.bb6; bitboards[7] = state.bb7;
+        bitboards[8] = state.bb8; bitboards[9] = state.bb9;
+        bitboards[10] = state.bb10; bitboards[11] = state.bb11;
 
         occupancies[0] = state.occ0;
         occupancies[1] = state.occ1;
@@ -196,6 +216,10 @@ public static class Board
 
         Zobrist.hashKey = state.hashKey;
     }
+
+    // =========================================================================
+    //  Debug Printing
+    // =========================================================================
 
     public static void PrintBoard()
     {
@@ -211,22 +235,19 @@ public static class Board
                     Console.Write($"  {8 - rank} ");
 
                 int piece = -1;
-
                 for (int bbPiece = P; bbPiece <= k; bbPiece++)
                     if (BitboardOperations.GetBit(bitboards[bbPiece], square))
                         piece = bbPiece;
 
                 Console.Write($" {(piece == -1 ? '.' : asciiPieces[piece])}");
             }
-
             Console.WriteLine();
         }
 
         Console.WriteLine("\n     a b c d e f g h\n");
-        Console.WriteLine($"     Side:     {(side == 0 ? "white" : "black")}");
-        Console.WriteLine($"     Enpassant:   {(enPassant != (int)noSquare ? squareToCoordinates[enPassant] : "no")}");
+        Console.WriteLine($"     Side:      {(side == 0 ? "white" : "black")}");
+        Console.WriteLine($"     Enpassant: {(enPassant != (int)noSquare ? squareToCoordinates[enPassant] : "no")}");
         Console.WriteLine($"     Castling:  {((castle & (int)wk) != 0 ? 'K' : '-')}{((castle & (int)wq) != 0 ? 'Q' : '-')}{((castle & (int)bk) != 0 ? 'k' : '-')}{((castle & (int)bq) != 0 ? 'q' : '-')}\n");
-
         Console.WriteLine($"     Hash key:  {Zobrist.hashKey}\n\n");
     }
 
@@ -239,13 +260,9 @@ public static class Board
             for (int file = 0; file < 8; file++)
             {
                 int square = rank * 8 + file;
-
-                if (file == 0)
-                    Console.Write($"  {8 - rank} ");
-
+                if (file == 0) Console.Write($"  {8 - rank} ");
                 Console.Write($" {(BitboardOperations.GetBit(bitboard, square) ? 1 : 0)}");
             }
-
             Console.WriteLine();
         }
 
@@ -260,7 +277,10 @@ public static class Board
         for (int i = 0; i < moveList.count; i++)
         {
             int move = moveList.moves[i];
-            Console.WriteLine($"{squareToCoordinates[MoveEncoding.GetMoveSource(move)]}{squareToCoordinates[MoveEncoding.GetMoveTarget(move)]}{(MoveEncoding.GetMovePromoted(move) != 0 ? promotedPieces[MoveEncoding.GetMovePromoted(move)] : ' ')}");
+            Console.WriteLine(
+                $"{squareToCoordinates[MoveEncoding.GetMoveSource(move)]}" +
+                $"{squareToCoordinates[MoveEncoding.GetMoveTarget(move)]}" +
+                $"{(MoveEncoding.GetMovePromoted(move) != 0 ? promotedPieces[MoveEncoding.GetMovePromoted(move)] : ' ')}");
         }
 
         Console.WriteLine($"\n      Total number of moves: {moveList.count}\n");
