@@ -1,9 +1,32 @@
+using static Board;
+
+// =============================================================================
+//  Move encoding — packs all move info into a single 32-bit int.
+//
+//  Bit layout:
+//    0-5   source square    (6 bits, 0-63)
+//    6-11  target square    (6 bits, 0-63)
+//    12-15 piece            (4 bits, 0-11)
+//    16-19 promoted piece   (4 bits, 0-11, 0 = no promotion)
+//    20    capture flag     (1 bit)
+//    21    double push flag (1 bit)
+//    22    en passant flag  (1 bit)
+//    23    castling flag    (1 bit)
+// =============================================================================
 
 public static class MoveEncoding
 {
-    public static int EncodeMove(int source, int target, int piece, int promoted, int capture, int @double, int enpassant, int castling)
+    public static int EncodeMove(int source, int target, int piece, int promoted,
+        int capture, int @double, int enpassant, int castling)
     {
-        return source | (target << 6) | (piece << 12) | (promoted << 16) | (capture << 20) | (@double << 21) | (enpassant << 22) | (castling << 23);
+        return source
+             | (target << 6)
+             | (piece << 12)
+             | (promoted << 16)
+             | (capture << 20)
+             | (@double << 21)
+             | (enpassant << 22)
+             | (castling << 23);
     }
 
     public static int GetMoveSource(int move) => move & 0x3F;
@@ -17,14 +40,18 @@ public static class MoveEncoding
 
     public static string GetMove(int move)
     {
-        return $"{Board.squareToCoordinates[GetMoveSource(move)]}{Board.squareToCoordinates[GetMoveTarget(move)]}{Board.promotedPieces[GetMovePromoted(move)]}";
+        return $"{Board.squareToCoordinates[GetMoveSource(move)]}" +
+               $"{Board.squareToCoordinates[GetMoveTarget(move)]}" +
+               $"{Board.promotedPieces[GetMovePromoted(move)]}";
     }
 
-    public static void PrintMove(int move)
-    {
-        Console.WriteLine($"{Board.squareToCoordinates[GetMoveSource(move)]}{Board.squareToCoordinates[GetMoveTarget(move)]}{Board.promotedPieces[GetMovePromoted(move)]}");
-    }
+    public static void PrintMove(int move) => Console.WriteLine(GetMove(move));
 }
+
+// =============================================================================
+//  Pre-allocated move list — avoids heap allocation during search.
+//  256 slots is the theoretical max (real max is 218 in chess).
+// =============================================================================
 
 public struct MoveList
 {
@@ -40,24 +67,18 @@ public struct MoveList
     }
 }
 
+// =============================================================================
+//  Board state snapshot — used for copy/takeback in search.
+//  Flat fields (not arrays) so the struct is a single contiguous block
+//  that copies efficiently via memcpy.
+// =============================================================================
+
 public struct BoardState
 {
-    public ulong bb0;
-    public ulong bb1;
-    public ulong bb2;
-    public ulong bb3;
-    public ulong bb4;
-    public ulong bb5;
-    public ulong bb6;
-    public ulong bb7;
-    public ulong bb8;
-    public ulong bb9;
-    public ulong bb10;
-    public ulong bb11;
+    public ulong bb0, bb1, bb2, bb3, bb4, bb5;
+    public ulong bb6, bb7, bb8, bb9, bb10, bb11;
 
-    public ulong occ0;
-    public ulong occ1;
-    public ulong occ2;
+    public ulong occ0, occ1, occ2;
 
     public int side;
     public int enPassant;
