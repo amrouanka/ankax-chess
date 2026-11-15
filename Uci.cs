@@ -135,7 +135,8 @@ public static class Uci
     {
         Console.WriteLine($"id name {EngineName}");
         Console.WriteLine($"id author {EngineAuthor}");
-        Console.WriteLine("option name Hash type spin default 16 min 1 max 128");
+        Console.WriteLine($"option name Hash type spin default {TranspositionTable.DefaultHashMb} " +
+                          $"min {TranspositionTable.MinHashMb} max {TranspositionTable.MaxHashMb}");
         Console.WriteLine("uciok");
     }
 
@@ -175,8 +176,8 @@ public static class Uci
         // When dynamic TT sizing is added, this is where it goes.
         if (string.Equals(name, "Hash", StringComparison.OrdinalIgnoreCase) && value != null)
         {
-            // int.TryParse(value, out int hashMb);
-            // TODO: Resize TT to hashMb megabytes
+            if (int.TryParse(value, out int hashMb))
+                TranspositionTable.Resize(hashMb);
         }
     }
 

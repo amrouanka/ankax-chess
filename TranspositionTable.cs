@@ -30,6 +30,8 @@
 //
 // =============================================================================
 
+using System.Runtime.CompilerServices;
+
 /// <summary>
 /// Describes the type of score stored in a transposition table entry.
 /// </summary>
@@ -58,24 +60,60 @@ public static class TranspositionTable
     //  Configuration
     // =========================================================================
 
-    // Power-of-2 size enables fast indexing via bitwise AND instead of modulo.
-    // 1 << 20 = 1,048,576 entries × 24 bytes ≈ 24 MB.
-    private const int TableSize = 1 << 20;
+    // Default size matches the UCI "default 16" advertisement.
+    public const int DefaultHashMb = 16;
+    public const int MinHashMb = 1;
+    public const int MaxHashMb = 1024;
 
-    private static readonly TTEntry[] table = new TTEntry[TableSize];
+    // Table is sized to a power of 2 so indexing uses a cheap bitwise AND
+    // instead of a modulo. When the user requests N MB, we round DOWN to the
+    // largest power-of-2 entry count that fits in N MB.
+    private static TTEntry[] table = [];
+    private static int indexMask;   // = table.Length - 1 (valid because length is power of 2)
 
     /// <summary>
-    /// Sentinel value returned by Probe when no usable entry is found.
+    /// Sentinel returned by Probe when no usable entry is found.
     /// </summary>
     public const int NoScore = int.MinValue;
 
+    // One-time init so the engine has a working table even if no setoption is sent.
+    static TranspositionTable()
+    {
+        Resize(DefaultHashMb);
+    }
+
     // =========================================================================
-    //  Public API
+    //  Sizing
     // =========================================================================
 
     /// <summary>
-    /// Clears all entries. Call once at the start of a new game.
+    /// Resizes the table to use approximately <paramref name="megabytes"/> of memory.
+    /// Rounds DOWN to the nearest power of 2 entry count so index masking stays
+    /// a single bitwise AND. Always clears the table afterwards — old entries
+    /// would hash to wrong indices under the new mask.
     /// </summary>
+    public static void Resize(int megabytes)
+    {
+        if (megabytes < MinHashMb) megabytes = MinHashMb;
+        if (megabytes > MaxHashMb) megabytes = MaxHashMb;
+
+        int entrySize = Unsafe.SizeOf<TTEntry>();
+        long requestedBytes = (long)megabytes * 1024 * 1024;
+        long maxEntries = requestedBytes / entrySize;
+
+        // Round DOWN to nearest power of 2. Ensures indexMask works correctly.
+        int entries = 1;
+        while ((long)entries * 2 <= maxEntries)
+            entries *= 2;
+
+        table = new TTEntry[entries];
+        indexMask = entries - 1;
+    }
+
+    // =========================================================================
+    //  Public API (indexing updated to use indexMask)
+    // =========================================================================
+
     public static void Clear()
     {
         Array.Clear(table, 0, table.Length);
@@ -87,7 +125,7 @@ public static class TranspositionTable
     /// </summary>
     public static void Store(ulong hashkey, int depth, int score, int move, TTFlag flag, int ply)
     {
-        int index = (int)(hashkey & (TableSize - 1));
+        int index = (int)(hashkey & (ulong)indexMask);
 
         // Convert mate scores from ply-relative to absolute
         if (score > 48000) score += ply;
@@ -113,7 +151,7 @@ public static class TranspositionTable
     {
         ttMove = 0;
 
-        int index = (int)(hashkey & (TableSize - 1));
+        int index = (int)(hashkey & (ulong)indexMask);
         TTEntry entry = table[index];
 
         // Hash collision check: different positions can map to the same index
