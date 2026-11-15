@@ -1,4 +1,3 @@
-using System.Runtime.CompilerServices;
 using static Board;
 
 // =============================================================================
@@ -50,17 +49,6 @@ public static class MoveEncoding
 }
 
 // =============================================================================
-//  Inline mailbox buffer — 64 ints stored directly inside BoardState.
-//  Uses InlineArray to avoid heap allocation during copy/takeback in search.
-// =============================================================================
-
-[InlineArray(64)]
-public struct MailboxBuffer
-{
-    private int _element0;
-}
-
-// =============================================================================
 //  Pre-allocated move list — avoids heap allocation during search.
 //  256 slots is the theoretical max (real max is 218 in chess).
 // =============================================================================
@@ -98,6 +86,4 @@ public struct BoardState
     public int halfmoveClock;
 
     public ulong hashKey;
-
-    public MailboxBuffer mailbox;
 }

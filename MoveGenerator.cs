@@ -358,25 +358,29 @@ public static class MoveGenerator
 
             int sourceSquare = GetMoveSource(move);
             int targetSquare = GetMoveTarget(move);
-            int capturedPiece = mailbox[targetSquare];
 
-            // --- Move the piece ---
             PopBit(ref bitboards[piece], sourceSquare);
             SetBit(ref bitboards[piece], targetSquare);
-            mailbox[sourceSquare] = -1;       // MAILBOX: piece leaves source
-            mailbox[targetSquare] = piece;    // MAILBOX: piece arrives at target
 
             Zobrist.hashKey ^= Zobrist.pieceKeys[piece, sourceSquare];
             Zobrist.hashKey ^= Zobrist.pieceKeys[piece, targetSquare];
 
-            // --- Capture ---
-            if (capture != 0 && GetMoveEnpassant(move) == 0)
+            if (capture != 0)
             {
-                PopBit(ref bitboards[capturedPiece], targetSquare);
-                Zobrist.hashKey ^= Zobrist.pieceKeys[capturedPiece, targetSquare];
+                int startPiece = isWhite ? p : P;
+                int endPiece = isWhite ? k : K;
+
+                for (int bbPiece = startPiece; bbPiece <= endPiece; bbPiece++)
+                {
+                    if (GetBit(bitboards[bbPiece], targetSquare))
+                    {
+                        PopBit(ref bitboards[bbPiece], targetSquare);
+                        Zobrist.hashKey ^= Zobrist.pieceKeys[bbPiece, targetSquare];
+                        break;
+                    }
+                }
             }
 
-            // --- Promotion ---
             int promotedPiece = GetMovePromoted(move);
             if (promotedPiece != 0)
             {
@@ -393,27 +397,22 @@ public static class MoveGenerator
 
                 SetBit(ref bitboards[promotedPiece], targetSquare);
                 Zobrist.hashKey ^= Zobrist.pieceKeys[promotedPiece, targetSquare];
-                mailbox[targetSquare] = promotedPiece;  // MAILBOX: pawn → promoted piece
             }
 
-            // --- En passant ---
             if (GetMoveEnpassant(move) != 0)
             {
                 if (isWhite)
                 {
                     PopBit(ref bitboards[p], targetSquare + 8);
                     Zobrist.hashKey ^= Zobrist.pieceKeys[p, targetSquare + 8];
-                    mailbox[targetSquare + 8] = -1;  // MAILBOX: remove captured black pawn
                 }
                 else
                 {
                     PopBit(ref bitboards[P], targetSquare - 8);
                     Zobrist.hashKey ^= Zobrist.pieceKeys[P, targetSquare - 8];
-                    mailbox[targetSquare - 8] = -1;  // MAILBOX: remove captured white pawn
                 }
             }
 
-            // --- Double push ---
             int doublePush = GetMoveDouble(move);
             if (doublePush != 0)
             {
@@ -427,10 +426,8 @@ public static class MoveGenerator
                     enPassant = targetSquare - 8;
                     Zobrist.hashKey ^= Zobrist.enpassantKeys[targetSquare - 8];
                 }
-                // MAILBOX: no update needed — no piece is added or removed
             }
 
-            // --- Castling ---
             if (GetMoveCastling(move) != 0)
             {
                 switch ((Square)targetSquare)
@@ -440,32 +437,24 @@ public static class MoveGenerator
                         SetBit(ref bitboards[R], (int)f1);
                         Zobrist.hashKey ^= Zobrist.pieceKeys[R, (int)h1];
                         Zobrist.hashKey ^= Zobrist.pieceKeys[R, (int)f1];
-                        mailbox[(int)h1] = -1;  // MAILBOX: rook leaves h1
-                        mailbox[(int)f1] = R;   // MAILBOX: rook arrives f1
                         break;
                     case c1:
                         PopBit(ref bitboards[R], (int)a1);
                         SetBit(ref bitboards[R], (int)d1);
                         Zobrist.hashKey ^= Zobrist.pieceKeys[R, (int)a1];
                         Zobrist.hashKey ^= Zobrist.pieceKeys[R, (int)d1];
-                        mailbox[(int)a1] = -1;  // MAILBOX: rook leaves a1
-                        mailbox[(int)d1] = R;   // MAILBOX: rook arrives d1
                         break;
                     case g8:
                         PopBit(ref bitboards[r], (int)h8);
                         SetBit(ref bitboards[r], (int)f8);
                         Zobrist.hashKey ^= Zobrist.pieceKeys[r, (int)h8];
                         Zobrist.hashKey ^= Zobrist.pieceKeys[r, (int)f8];
-                        mailbox[(int)h8] = -1;  // MAILBOX: rook leaves h8
-                        mailbox[(int)f8] = r;   // MAILBOX: rook arrives f8
                         break;
                     case c8:
                         PopBit(ref bitboards[r], (int)a8);
                         SetBit(ref bitboards[r], (int)d8);
                         Zobrist.hashKey ^= Zobrist.pieceKeys[r, (int)a8];
                         Zobrist.hashKey ^= Zobrist.pieceKeys[r, (int)d8];
-                        mailbox[(int)a8] = -1;  // MAILBOX: rook leaves a8
-                        mailbox[(int)d8] = r;   // MAILBOX: rook arrives d8
                         break;
                 }
             }

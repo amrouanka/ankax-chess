@@ -66,7 +66,6 @@ public static class Board
 
     public static ulong[] bitboards = new ulong[12];
     public static ulong[] occupancies = new ulong[3];
-    public static int[] mailbox = new int[64];  // MAILBOX: -1 = empty, 0-11 = piece
     public static int side;
     public static int enPassant = (int)noSquare;
     public static int castle;
@@ -144,19 +143,6 @@ public static class Board
 
         UpdateOccupancies();
 
-        // MAILBOX: build from bitboards
-        Array.Fill(mailbox, -1);
-        for (int piece = P; piece <= k; piece++)
-        {
-            ulong bb = bitboards[piece];
-            while (bb != 0)
-            {
-                int sq = BitboardOperations.GetLs1bIndex(bb);
-                mailbox[sq] = piece;
-                bb &= bb - 1;  // pop LSB (faster than PopBit for local variable)
-            }
-        }
-
         Zobrist.hashKey = Zobrist.GenerateHashKey();
     }
 
@@ -183,7 +169,7 @@ public static class Board
 
     public static BoardState CopyBoard()
     {
-        BoardState state = new()
+        return new BoardState
         {
             bb0 = bitboards[0],
             bb1 = bitboards[1],
@@ -209,15 +195,9 @@ public static class Board
 
             hashKey = Zobrist.hashKey
         };
-
-        // Save mailbox (256 bytes — JIT will vectorize this)
-        for (int i = 0; i < 64; i++)
-            state.mailbox[i] = mailbox[i];
-
-        return state;
     }
 
-    public static void TakeBack(ref BoardState state)
+    public static void TakeBack(BoardState state)
     {
         bitboards[0] = state.bb0; bitboards[1] = state.bb1;
         bitboards[2] = state.bb2; bitboards[3] = state.bb3;
@@ -236,10 +216,6 @@ public static class Board
         halfmoveClock = state.halfmoveClock;
 
         Zobrist.hashKey = state.hashKey;
-
-        // Restore mailbox (256 bytes — JIT will vectorize this)
-        for (int i = 0; i < 64; i++)
-            mailbox[i] = state.mailbox[i];
     }
 
     // =========================================================================

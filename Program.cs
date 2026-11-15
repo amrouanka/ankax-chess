@@ -36,18 +36,25 @@ internal static class Program
 
     private static int Main(string[] args)
     {
-        if (args.Length == 0)
+        try
         {
-            Uci.UciLoop();
-            return 0;
+            if (args.Length == 0)
+            {
+                Uci.UciLoop();
+                return 0;
+            }
+            return args[0].ToLowerInvariant() switch
+            {
+                "perft" => HandlePerftCommand(args),
+                "bench" => HandleBenchCommand(args),
+                _ => PrintUsageAndExit()
+            };
         }
-
-        return args[0].ToLowerInvariant() switch
+        catch (Exception ex)
         {
-            "perft" => HandlePerftCommand(args),
-            "bench" => HandleBenchCommand(args),
-            _ => PrintUsageAndExit()
-        };
+            Console.Error.WriteLine($"FATAL: {ex}");
+            return 1;
+        }
     }
 
     private static int PrintUsageAndExit()
@@ -57,7 +64,6 @@ internal static class Program
         Console.WriteLine("  AnkaX perft <depth>      Run perft on starting position");
         Console.WriteLine("  AnkaX perft <depth> <fen>  Run perft on given FEN");
         Console.WriteLine("  AnkaX perft suite        Run built-in perft test suite");
-        Console.WriteLine("  AnkaX bench              (reserved) Run benchmark");
         return 1;
     }
 
@@ -120,12 +126,12 @@ internal static class Program
 
             if (MakeMove(moveList.moves[i], (int)allMoves) == 0)
             {
-                Board.TakeBack(ref state);
+                Board.TakeBack(state);
                 continue;
             }
 
             nodes += PerftDriver(depth - 1);
-            Board.TakeBack(ref state);
+            Board.TakeBack(state);
         }
 
         return nodes;
@@ -154,13 +160,13 @@ internal static class Program
 
             if (MakeMove(moveList.moves[i], (int)allMoves) == 0)
             {
-                Board.TakeBack(ref state);
+                Board.TakeBack(state);
                 continue;
             }
 
             long nodesForMove = depth == 1 ? 1 : PerftDriver(depth - 1);
             totalNodes += nodesForMove;
-            Board.TakeBack(ref state);
+            Board.TakeBack(state);
 
             Console.WriteLine($"     {MoveEncoding.GetMove(moveList.moves[i]),-6} : {nodesForMove}");
         }
