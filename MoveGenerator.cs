@@ -6,496 +6,332 @@ using static Square;
 
 public static class MoveGenerator
 {
+    // Maps each square to a bitmask of castling rights that SURVIVE a move
+    // from/to that square. Used in MakeMove to strip rights when a king or
+    // rook moves (or is captured).
     private static readonly int[] castlingRights =
     [
         7, 15, 15, 15, 3, 15, 15, 11,
-        15, 15, 15, 15, 15, 15, 15, 15,
-        15, 15, 15, 15, 15, 15, 15, 15,
-        15, 15, 15, 15, 15, 15, 15, 15,
-        15, 15, 15, 15, 15, 15, 15, 15,
-        15, 15, 15, 15, 15, 15, 15, 15,
-        15, 15, 15, 15, 15, 15, 15, 15,
-        13, 15, 15, 15, 12, 15, 15, 14
+       15, 15, 15, 15, 15, 15, 15, 15,
+       15, 15, 15, 15, 15, 15, 15, 15,
+       15, 15, 15, 15, 15, 15, 15, 15,
+       15, 15, 15, 15, 15, 15, 15, 15,
+       15, 15, 15, 15, 15, 15, 15, 15,
+       15, 15, 15, 15, 15, 15, 15, 15,
+       13, 15, 15, 15, 12, 15, 15, 14
     ];
 
     public const int White = 0;
     public const int Black = 1;
     public const int Both = 2;
 
-    public static void GenerateMoves(ref MoveList moveList)
+    // =========================================================================
+    //  Move Generation
+    // =========================================================================
+
+    /// <summary>
+    /// Generates all pseudo-legal moves (or captures only) for the current position.
+    /// Legality filtering (king left in check) happens later in MakeMove.
+    /// </summary>
+    /// <param name="capturesOnly">
+    /// When true, only captures and promotions are generated.
+    /// Used by quiescence search to avoid the horizon effect.
+    /// </param>
+    public static void GenerateMoves(ref MoveList moveList, bool capturesOnly = false)
     {
         moveList.count = 0;
-        int sourceSquare, targetSquare;
-        ulong bitboard, attacks;
 
         bool isWhite = side == White;
         ulong friendlyOcc = isWhite ? occupancies[White] : occupancies[Black];
         ulong enemyOcc = isWhite ? occupancies[Black] : occupancies[White];
         ulong bothOcc = occupancies[Both];
-        ulong notFriendly = ~friendlyOcc;
 
-        for (int piece = P; piece <= k; piece++)
+        // In captures-only mode, targets are restricted to enemy pieces.
+        // In all-moves mode, targets are any square not occupied by a friendly piece.
+        ulong targetMask = capturesOnly ? enemyOcc : ~friendlyOcc;
+
+        // ----- Side-dependent piece constants -----
+        int pawnPiece = isWhite ? P : p;
+        int knightPiece = isWhite ? N : n;
+        int bishopPiece = isWhite ? B : b;
+        int rookPiece = isWhite ? R : r;
+        int queenPiece = isWhite ? Q : q;
+        int kingPiece = isWhite ? K : k;
+
+        // =====================================================================
+        //  Pawns (unified for both sides via direction and rank parameters)
+        // =====================================================================
+        //
+        //  White pawns move "up" the board (square index decreases by 8).
+        //  Black pawns move "down" (square index increases by 8).
+        //
+        //  Promotion ranks:  White = rank 7 (a7..h7, indices 8..15)
+        //                    Black = rank 2 (a2..h2, indices 48..55)
+        //  Double-push ranks: White = rank 2 (a2..h2)
+        //                     Black = rank 7 (a7..h7)
+
+        int pawnDir = isWhite ? -8 : 8;
+        int promoFirst = isWhite ? (int)a7 : (int)a2;
+        int promoLast = isWhite ? (int)h7 : (int)h2;
+        int doubleFirst = isWhite ? (int)a2 : (int)a7;
+        int doubleLast = isWhite ? (int)h2 : (int)h7;
+        int qPromo = isWhite ? Q : q;
+        int rPromo = isWhite ? R : r;
+        int bPromo = isWhite ? B : b;
+        int nPromo = isWhite ? N : n;
+
+        ulong pawns = bitboards[pawnPiece];
+        while (pawns != 0)
         {
-            bitboard = bitboards[piece];
+            int src = BitboardOperations.GetLs1bIndex(pawns);
 
-            if (bitboard == 0) continue;
+            // --- Pushes (skipped in captures-only mode) ---
+            if (!capturesOnly)
+            {
+                int target = src + pawnDir;
+
+                if (target >= 0 && target < 64 && !BitboardOperations.GetBit(bothOcc, target))
+                {
+                    if (src >= promoFirst && src <= promoLast)
+                    {
+                        AddMove(ref moveList, EncodeMove(src, target, pawnPiece, qPromo, 0, 0, 0, 0));
+                        AddMove(ref moveList, EncodeMove(src, target, pawnPiece, rPromo, 0, 0, 0, 0));
+                        AddMove(ref moveList, EncodeMove(src, target, pawnPiece, bPromo, 0, 0, 0, 0));
+                        AddMove(ref moveList, EncodeMove(src, target, pawnPiece, nPromo, 0, 0, 0, 0));
+                    }
+                    else
+                    {
+                        AddMove(ref moveList, EncodeMove(src, target, pawnPiece, 0, 0, 0, 0, 0));
+
+                        // Double push from starting rank
+                        if (src >= doubleFirst && src <= doubleLast &&
+                            !BitboardOperations.GetBit(bothOcc, target + pawnDir))
+                        {
+                            AddMove(ref moveList, EncodeMove(src, target + pawnDir, pawnPiece, 0, 0, 1, 0, 0));
+                        }
+                    }
+                }
+            }
+
+            // --- Captures ---
+            ulong attacks = pawnAttacks[side, src] & enemyOcc;
+            while (attacks != 0)
+            {
+                int target = BitboardOperations.GetLs1bIndex(attacks);
+
+                if (src >= promoFirst && src <= promoLast)
+                {
+                    AddMove(ref moveList, EncodeMove(src, target, pawnPiece, qPromo, 1, 0, 0, 0));
+                    AddMove(ref moveList, EncodeMove(src, target, pawnPiece, rPromo, 1, 0, 0, 0));
+                    AddMove(ref moveList, EncodeMove(src, target, pawnPiece, bPromo, 1, 0, 0, 0));
+                    AddMove(ref moveList, EncodeMove(src, target, pawnPiece, nPromo, 1, 0, 0, 0));
+                }
+                else
+                {
+                    AddMove(ref moveList, EncodeMove(src, target, pawnPiece, 0, 1, 0, 0, 0));
+                }
+
+                BitboardOperations.PopBit(ref attacks, target);
+            }
+
+            // --- En passant ---
+            if (enPassant != (int)noSquare)
+            {
+                ulong epAttacks = pawnAttacks[side, src] & (1UL << enPassant);
+                if (epAttacks != 0)
+                    AddMove(ref moveList, EncodeMove(src, enPassant, pawnPiece, 0, 1, 0, 1, 0));
+            }
+
+            BitboardOperations.PopBit(ref pawns, src);
+        }
+
+        // =====================================================================
+        //  Knights
+        // =====================================================================
+
+        ulong knights = bitboards[knightPiece];
+        while (knights != 0)
+        {
+            int src = BitboardOperations.GetLs1bIndex(knights);
+            ulong attacks = knightAttacks[src] & targetMask;
+
+            while (attacks != 0)
+            {
+                int target = BitboardOperations.GetLs1bIndex(attacks);
+                int cap = BitboardOperations.GetBit(enemyOcc, target) ? 1 : 0;
+                AddMove(ref moveList, EncodeMove(src, target, knightPiece, 0, cap, 0, 0, 0));
+                BitboardOperations.PopBit(ref attacks, target);
+            }
+
+            BitboardOperations.PopBit(ref knights, src);
+        }
+
+        // =====================================================================
+        //  Bishops
+        // =====================================================================
+
+        ulong bishops = bitboards[bishopPiece];
+        while (bishops != 0)
+        {
+            int src = BitboardOperations.GetLs1bIndex(bishops);
+            ulong attacks = GetBishopAttacks(src, bothOcc) & targetMask;
+
+            while (attacks != 0)
+            {
+                int target = BitboardOperations.GetLs1bIndex(attacks);
+                int cap = BitboardOperations.GetBit(enemyOcc, target) ? 1 : 0;
+                AddMove(ref moveList, EncodeMove(src, target, bishopPiece, 0, cap, 0, 0, 0));
+                BitboardOperations.PopBit(ref attacks, target);
+            }
+
+            BitboardOperations.PopBit(ref bishops, src);
+        }
+
+        // =====================================================================
+        //  Rooks
+        // =====================================================================
+
+        ulong rooks = bitboards[rookPiece];
+        while (rooks != 0)
+        {
+            int src = BitboardOperations.GetLs1bIndex(rooks);
+            ulong attacks = GetRookAttacks(src, bothOcc) & targetMask;
+
+            while (attacks != 0)
+            {
+                int target = BitboardOperations.GetLs1bIndex(attacks);
+                int cap = BitboardOperations.GetBit(enemyOcc, target) ? 1 : 0;
+                AddMove(ref moveList, EncodeMove(src, target, rookPiece, 0, cap, 0, 0, 0));
+                BitboardOperations.PopBit(ref attacks, target);
+            }
+
+            BitboardOperations.PopBit(ref rooks, src);
+        }
+
+        // =====================================================================
+        //  Queens
+        // =====================================================================
+
+        ulong queens = bitboards[queenPiece];
+        while (queens != 0)
+        {
+            int src = BitboardOperations.GetLs1bIndex(queens);
+            ulong attacks = GetQueenAttacks(src, bothOcc) & targetMask;
+
+            while (attacks != 0)
+            {
+                int target = BitboardOperations.GetLs1bIndex(attacks);
+                int cap = BitboardOperations.GetBit(enemyOcc, target) ? 1 : 0;
+                AddMove(ref moveList, EncodeMove(src, target, queenPiece, 0, cap, 0, 0, 0));
+                BitboardOperations.PopBit(ref attacks, target);
+            }
+
+            BitboardOperations.PopBit(ref queens, src);
+        }
+
+        // =====================================================================
+        //  King moves
+        // =====================================================================
+
+        ulong kings = bitboards[kingPiece];
+        while (kings != 0)
+        {
+            int src = BitboardOperations.GetLs1bIndex(kings);
+            ulong attacks = kingAttacks[src] & targetMask;
+
+            while (attacks != 0)
+            {
+                int target = BitboardOperations.GetLs1bIndex(attacks);
+                int cap = BitboardOperations.GetBit(enemyOcc, target) ? 1 : 0;
+                AddMove(ref moveList, EncodeMove(src, target, kingPiece, 0, cap, 0, 0, 0));
+                BitboardOperations.PopBit(ref attacks, target);
+            }
+
+            BitboardOperations.PopBit(ref kings, src);
+        }
+
+        // =====================================================================
+        //  Castling (only in all-moves mode — castling is never a capture)
+        // =====================================================================
+
+        if (!capturesOnly)
+        {
+            int enemySide = isWhite ? Black : White;
 
             if (isWhite)
             {
-                if (piece == P)
+                // Kingside: e1-g1, rook h1-f1
+                if ((castle & (int)wk) != 0 &&
+                    !BitboardOperations.GetBit(bothOcc, (int)f1) &&
+                    !BitboardOperations.GetBit(bothOcc, (int)g1) &&
+                    !IsSquareAttacked((int)e1, enemySide) &&
+                    !IsSquareAttacked((int)f1, enemySide))
                 {
-                    while (bitboard != 0)
-                    {
-                        sourceSquare = BitboardOperations.GetLs1bIndex(bitboard);
-                        targetSquare = sourceSquare - 8;
-
-                        if (!(targetSquare < (int)a8) && !BitboardOperations.GetBit(bothOcc, targetSquare))
-                        {
-                            // pawn promotion
-                            if (sourceSquare >= (int)a7 && sourceSquare <= (int)h7)
-                            {
-                                AddMove(ref moveList, EncodeMove(sourceSquare, targetSquare, piece, Q, 0, 0, 0, 0));
-                                AddMove(ref moveList, EncodeMove(sourceSquare, targetSquare, piece, R, 0, 0, 0, 0));
-                                AddMove(ref moveList, EncodeMove(sourceSquare, targetSquare, piece, B, 0, 0, 0, 0));
-                                AddMove(ref moveList, EncodeMove(sourceSquare, targetSquare, piece, N, 0, 0, 0, 0));
-                            }
-                            else
-                            {
-                                // normal pawn move
-                                AddMove(ref moveList, EncodeMove(sourceSquare, targetSquare, piece, 0, 0, 0, 0, 0));
-
-                                // double push pawn move
-                                if (sourceSquare >= (int)a2 && sourceSquare <= (int)h2 && !BitboardOperations.GetBit(bothOcc, targetSquare - 8))
-                                    AddMove(ref moveList, EncodeMove(sourceSquare, targetSquare - 8, piece, 0, 0, 1, 0, 0));
-                            }
-                        }
-
-                        attacks = pawnAttacks[side, sourceSquare] & occupancies[Black];
-
-                        while (attacks != 0)
-                        {
-                            targetSquare = BitboardOperations.GetLs1bIndex(attacks);
-
-                            // pawn promotion capture
-                            if (sourceSquare >= (int)a7 && sourceSquare <= (int)h7)
-                            {
-                                AddMove(ref moveList, EncodeMove(sourceSquare, targetSquare, piece, Q, 1, 0, 0, 0));
-                                AddMove(ref moveList, EncodeMove(sourceSquare, targetSquare, piece, R, 1, 0, 0, 0));
-                                AddMove(ref moveList, EncodeMove(sourceSquare, targetSquare, piece, B, 1, 0, 0, 0));
-                                AddMove(ref moveList, EncodeMove(sourceSquare, targetSquare, piece, N, 1, 0, 0, 0));
-                            }
-                            else    // normal capture
-                                AddMove(ref moveList, EncodeMove(sourceSquare, targetSquare, piece, 0, 1, 0, 0, 0));
-
-                            BitboardOperations.PopBit(ref attacks, targetSquare);
-                        }
-
-                        if (enPassant != (int)noSquare)
-                        {
-                            ulong epAttacks = pawnAttacks[side, sourceSquare] & (1UL << enPassant);
-
-                            if (epAttacks != 0)
-                                AddMove(ref moveList, EncodeMove(sourceSquare, BitboardOperations.GetLs1bIndex(epAttacks), piece, 0, 1, 0, 1, 0));
-                        }
-
-                        BitboardOperations.PopBit(ref bitboard, sourceSquare);
-                    }
+                    AddMove(ref moveList, EncodeMove((int)e1, (int)g1, K, 0, 0, 0, 0, 1));
                 }
 
-                // White castling
-                if (piece == K)
+                // Queenside: e1-c1, rook a1-d1
+                if ((castle & (int)wq) != 0 &&
+                    !BitboardOperations.GetBit(bothOcc, (int)d1) &&
+                    !BitboardOperations.GetBit(bothOcc, (int)c1) &&
+                    !BitboardOperations.GetBit(bothOcc, (int)b1) &&
+                    !IsSquareAttacked((int)e1, enemySide) &&
+                    !IsSquareAttacked((int)d1, enemySide))
                 {
-                    if ((castle & (int)wk) != 0 && !BitboardOperations.GetBit(bothOcc, (int)f1) && !BitboardOperations.GetBit(bothOcc, (int)g1) && !IsSquareAttacked((int)e1, Black) && !IsSquareAttacked((int)f1, Black))
-                        AddMove(ref moveList, EncodeMove((int)e1, (int)g1, piece, 0, 0, 0, 0, 1));
-
-                    if ((castle & (int)wq) != 0 && !BitboardOperations.GetBit(bothOcc, (int)d1) && !BitboardOperations.GetBit(bothOcc, (int)c1) && !BitboardOperations.GetBit(bothOcc, (int)b1) && !IsSquareAttacked((int)e1, Black) && !IsSquareAttacked((int)d1, Black))
-                        AddMove(ref moveList, EncodeMove((int)e1, (int)c1, piece, 0, 0, 0, 0, 1));
+                    AddMove(ref moveList, EncodeMove((int)e1, (int)c1, K, 0, 0, 0, 0, 1));
                 }
             }
             else
             {
-                if (piece == p)
+                // Kingside: e8-g8, rook h8-f8
+                if ((castle & (int)bk) != 0 &&
+                    !BitboardOperations.GetBit(bothOcc, (int)f8) &&
+                    !BitboardOperations.GetBit(bothOcc, (int)g8) &&
+                    !IsSquareAttacked((int)e8, enemySide) &&
+                    !IsSquareAttacked((int)f8, enemySide))
                 {
-                    while (bitboard != 0)
-                    {
-                        sourceSquare = BitboardOperations.GetLs1bIndex(bitboard);
-                        targetSquare = sourceSquare + 8;
-
-                        if (!(targetSquare > (int)h1) && !BitboardOperations.GetBit(bothOcc, targetSquare))
-                        {
-                            // pawn promotion
-                            if (sourceSquare >= (int)a2 && sourceSquare <= (int)h2)
-                            {
-                                AddMove(ref moveList, EncodeMove(sourceSquare, targetSquare, piece, q, 0, 0, 0, 0));
-                                AddMove(ref moveList, EncodeMove(sourceSquare, targetSquare, piece, r, 0, 0, 0, 0));
-                                AddMove(ref moveList, EncodeMove(sourceSquare, targetSquare, piece, b, 0, 0, 0, 0));
-                                AddMove(ref moveList, EncodeMove(sourceSquare, targetSquare, piece, n, 0, 0, 0, 0));
-                            }
-                            else
-                            {
-                                // normal pawn move
-                                AddMove(ref moveList, EncodeMove(sourceSquare, targetSquare, piece, 0, 0, 0, 0, 0));
-
-                                // double pawn move
-                                if (sourceSquare >= (int)a7 && sourceSquare <= (int)h7 && !BitboardOperations.GetBit(bothOcc, targetSquare + 8))
-                                    AddMove(ref moveList, EncodeMove(sourceSquare, targetSquare + 8, piece, 0, 0, 1, 0, 0));
-                            }
-                        }
-
-                        attacks = pawnAttacks[side, sourceSquare] & occupancies[White];
-                        while (attacks != 0)
-                        {
-                            targetSquare = BitboardOperations.GetLs1bIndex(attacks);
-
-                            if (sourceSquare >= (int)a2 && sourceSquare <= (int)h2)
-                            {
-                                AddMove(ref moveList, EncodeMove(sourceSquare, targetSquare, piece, q, 1, 0, 0, 0));
-                                AddMove(ref moveList, EncodeMove(sourceSquare, targetSquare, piece, r, 1, 0, 0, 0));
-                                AddMove(ref moveList, EncodeMove(sourceSquare, targetSquare, piece, b, 1, 0, 0, 0));
-                                AddMove(ref moveList, EncodeMove(sourceSquare, targetSquare, piece, n, 1, 0, 0, 0));
-                            }
-                            else
-                                AddMove(ref moveList, EncodeMove(sourceSquare, targetSquare, piece, 0, 1, 0, 0, 0));
-
-                            BitboardOperations.PopBit(ref attacks, targetSquare);
-                        }
-
-                        if (enPassant != (int)noSquare)
-                        {
-                            ulong epAttacks = pawnAttacks[side, sourceSquare] & (1UL << enPassant);
-
-                            if (epAttacks != 0)
-                                AddMove(ref moveList, EncodeMove(sourceSquare, BitboardOperations.GetLs1bIndex(epAttacks), piece, 0, 1, 0, 1, 0));
-                        }
-
-                        BitboardOperations.PopBit(ref bitboard, sourceSquare);
-                    }
+                    AddMove(ref moveList, EncodeMove((int)e8, (int)g8, k, 0, 0, 0, 0, 1));
                 }
 
-                if (piece == k)
+                // Queenside: e8-c8, rook a8-d8
+                if ((castle & (int)bq) != 0 &&
+                    !BitboardOperations.GetBit(bothOcc, (int)d8) &&
+                    !BitboardOperations.GetBit(bothOcc, (int)c8) &&
+                    !BitboardOperations.GetBit(bothOcc, (int)b8) &&
+                    !IsSquareAttacked((int)e8, enemySide) &&
+                    !IsSquareAttacked((int)d8, enemySide))
                 {
-                    if ((castle & (int)bk) != 0 && !BitboardOperations.GetBit(bothOcc, (int)f8) && !BitboardOperations.GetBit(bothOcc, (int)g8) && !IsSquareAttacked((int)e8, White) && !IsSquareAttacked((int)f8, White))
-                        AddMove(ref moveList, EncodeMove((int)e8, (int)g8, piece, 0, 0, 0, 0, 1));
-
-                    if ((castle & (int)bq) != 0 && !BitboardOperations.GetBit(bothOcc, (int)d8) && !BitboardOperations.GetBit(bothOcc, (int)c8) && !BitboardOperations.GetBit(bothOcc, (int)b8) && !IsSquareAttacked((int)e8, White) && !IsSquareAttacked((int)d8, White))
-                        AddMove(ref moveList, EncodeMove((int)e8, (int)c8, piece, 0, 0, 0, 0, 1));
-                }
-            }
-
-            if (isWhite ? piece == N : piece == n)
-            {
-                while (bitboard != 0)
-                {
-                    sourceSquare = BitboardOperations.GetLs1bIndex(bitboard);
-                    attacks = knightAttacks[sourceSquare] & notFriendly;
-
-                    while (attacks != 0)
-                    {
-                        targetSquare = BitboardOperations.GetLs1bIndex(attacks);
-
-                        // quite move
-                        if (!BitboardOperations.GetBit(enemyOcc, targetSquare))
-                            AddMove(ref moveList, EncodeMove(sourceSquare, targetSquare, piece, 0, 0, 0, 0, 0));
-
-                        // capture move
-                        else
-                            AddMove(ref moveList, EncodeMove(sourceSquare, targetSquare, piece, 0, 1, 0, 0, 0));
-
-                        BitboardOperations.PopBit(ref attacks, targetSquare);
-                    }
-
-                    BitboardOperations.PopBit(ref bitboard, sourceSquare);
-                }
-            }
-
-            if (isWhite ? piece == B : piece == b)
-            {
-                while (bitboard != 0)
-                {
-                    sourceSquare = BitboardOperations.GetLs1bIndex(bitboard);
-                    attacks = GetBishopAttacks(sourceSquare, bothOcc) & notFriendly;
-
-                    while (attacks != 0)
-                    {
-                        targetSquare = BitboardOperations.GetLs1bIndex(attacks);
-
-                        if (!BitboardOperations.GetBit(enemyOcc, targetSquare))
-                            AddMove(ref moveList, EncodeMove(sourceSquare, targetSquare, piece, 0, 0, 0, 0, 0));
-                        else
-                            AddMove(ref moveList, EncodeMove(sourceSquare, targetSquare, piece, 0, 1, 0, 0, 0));
-
-                        BitboardOperations.PopBit(ref attacks, targetSquare);
-                    }
-
-                    BitboardOperations.PopBit(ref bitboard, sourceSquare);
-                }
-            }
-
-            if (isWhite ? piece == R : piece == r)
-            {
-                while (bitboard != 0)
-                {
-                    sourceSquare = BitboardOperations.GetLs1bIndex(bitboard);
-                    attacks = GetRookAttacks(sourceSquare, bothOcc) & notFriendly;
-
-                    while (attacks != 0)
-                    {
-                        targetSquare = BitboardOperations.GetLs1bIndex(attacks);
-
-                        if (!BitboardOperations.GetBit(enemyOcc, targetSquare))
-                            AddMove(ref moveList, EncodeMove(sourceSquare, targetSquare, piece, 0, 0, 0, 0, 0));
-                        else
-                            AddMove(ref moveList, EncodeMove(sourceSquare, targetSquare, piece, 0, 1, 0, 0, 0));
-
-                        BitboardOperations.PopBit(ref attacks, targetSquare);
-                    }
-
-                    BitboardOperations.PopBit(ref bitboard, sourceSquare);
-                }
-            }
-
-            if (isWhite ? piece == Q : piece == q)
-            {
-                while (bitboard != 0)
-                {
-                    sourceSquare = BitboardOperations.GetLs1bIndex(bitboard);
-                    attacks = GetQueenAttacks(sourceSquare, bothOcc) & notFriendly;
-
-                    while (attacks != 0)
-                    {
-                        targetSquare = BitboardOperations.GetLs1bIndex(attacks);
-
-                        if (!BitboardOperations.GetBit(enemyOcc, targetSquare))
-                            AddMove(ref moveList, EncodeMove(sourceSquare, targetSquare, piece, 0, 0, 0, 0, 0));
-                        else
-                            AddMove(ref moveList, EncodeMove(sourceSquare, targetSquare, piece, 0, 1, 0, 0, 0));
-
-                        BitboardOperations.PopBit(ref attacks, targetSquare);
-                    }
-
-                    BitboardOperations.PopBit(ref bitboard, sourceSquare);
-                }
-            }
-
-            if (isWhite ? piece == K : piece == k)
-            {
-                while (bitboard != 0)
-                {
-                    sourceSquare = BitboardOperations.GetLs1bIndex(bitboard);
-                    attacks = kingAttacks[sourceSquare] & notFriendly;
-
-                    while (attacks != 0)
-                    {
-                        targetSquare = BitboardOperations.GetLs1bIndex(attacks);
-
-                        if (!BitboardOperations.GetBit(enemyOcc, targetSquare))
-                            AddMove(ref moveList, EncodeMove(sourceSquare, targetSquare, piece, 0, 0, 0, 0, 0));
-                        else
-                            AddMove(ref moveList, EncodeMove(sourceSquare, targetSquare, piece, 0, 1, 0, 0, 0));
-
-                        BitboardOperations.PopBit(ref attacks, targetSquare);
-                    }
-
-                    BitboardOperations.PopBit(ref bitboard, sourceSquare);
+                    AddMove(ref moveList, EncodeMove((int)e8, (int)c8, k, 0, 0, 0, 0, 1));
                 }
             }
         }
     }
 
-    public static void GenerateCaptureMoves(ref MoveList moveList)
-    {
-        moveList.count = 0;
-        int sourceSquare, targetSquare;
-        ulong bitboard, attacks;
+    /// <summary>
+    /// Captures-only wrapper for quiescence search.
+    /// </summary>
+    public static void GenerateCaptureMoves(ref MoveList moveList) =>
+        GenerateMoves(ref moveList, capturesOnly: true);
 
-        bool isWhite = side == White;
-        ulong friendlyOcc = isWhite ? occupancies[White] : occupancies[Black];
-        ulong enemyOcc = isWhite ? occupancies[Black] : occupancies[White];
-        ulong bothOcc = occupancies[Both];
-        ulong notFriendly = ~friendlyOcc;
-
-        for (int piece = P; piece <= k; piece++)
-        {
-            bitboard = bitboards[piece];
-
-            if (bitboard == 0) continue;
-
-            if (isWhite)
-            {
-                if (piece == P)
-                {
-                    while (bitboard != 0)
-                    {
-                        sourceSquare = BitboardOperations.GetLs1bIndex(bitboard);
-
-                        attacks = pawnAttacks[side, sourceSquare] & occupancies[Black];
-
-                        while (attacks != 0)
-                        {
-                            targetSquare = BitboardOperations.GetLs1bIndex(attacks);
-
-                            // pawn promotion capture
-                            if (sourceSquare >= (int)a7 && sourceSquare <= (int)h7)
-                            {
-                                AddMove(ref moveList, EncodeMove(sourceSquare, targetSquare, piece, Q, 1, 0, 0, 0));
-                                AddMove(ref moveList, EncodeMove(sourceSquare, targetSquare, piece, R, 1, 0, 0, 0));
-                                AddMove(ref moveList, EncodeMove(sourceSquare, targetSquare, piece, B, 1, 0, 0, 0));
-                                AddMove(ref moveList, EncodeMove(sourceSquare, targetSquare, piece, N, 1, 0, 0, 0));
-                            }
-                            else    // normal capture
-                                AddMove(ref moveList, EncodeMove(sourceSquare, targetSquare, piece, 0, 1, 0, 0, 0));
-
-                            BitboardOperations.PopBit(ref attacks, targetSquare);
-                        }
-
-                        if (enPassant != (int)noSquare)
-                        {
-                            ulong epAttacks = pawnAttacks[side, sourceSquare] & (1UL << enPassant);
-
-                            if (epAttacks != 0)
-                                AddMove(ref moveList, EncodeMove(sourceSquare, BitboardOperations.GetLs1bIndex(epAttacks), piece, 0, 1, 0, 1, 0));
-                        }
-
-                        BitboardOperations.PopBit(ref bitboard, sourceSquare);
-                    }
-                }
-            }
-            else
-            {
-                if (piece == p)
-                {
-                    while (bitboard != 0)
-                    {
-                        sourceSquare = BitboardOperations.GetLs1bIndex(bitboard);
-
-                        attacks = pawnAttacks[side, sourceSquare] & occupancies[White];
-                        while (attacks != 0)
-                        {
-                            targetSquare = BitboardOperations.GetLs1bIndex(attacks);
-
-                            if (sourceSquare >= (int)a2 && sourceSquare <= (int)h2)
-                            {
-                                AddMove(ref moveList, EncodeMove(sourceSquare, targetSquare, piece, q, 1, 0, 0, 0));
-                                AddMove(ref moveList, EncodeMove(sourceSquare, targetSquare, piece, r, 1, 0, 0, 0));
-                                AddMove(ref moveList, EncodeMove(sourceSquare, targetSquare, piece, b, 1, 0, 0, 0));
-                                AddMove(ref moveList, EncodeMove(sourceSquare, targetSquare, piece, n, 1, 0, 0, 0));
-                            }
-                            else
-                                AddMove(ref moveList, EncodeMove(sourceSquare, targetSquare, piece, 0, 1, 0, 0, 0));
-
-                            BitboardOperations.PopBit(ref attacks, targetSquare);
-                        }
-
-                        if (enPassant != (int)noSquare)
-                        {
-                            ulong epAttacks = pawnAttacks[side, sourceSquare] & (1UL << enPassant);
-
-                            if (epAttacks != 0)
-                                AddMove(ref moveList, EncodeMove(sourceSquare, BitboardOperations.GetLs1bIndex(epAttacks), piece, 0, 1, 0, 1, 0));
-                        }
-
-                        BitboardOperations.PopBit(ref bitboard, sourceSquare);
-                    }
-                }
-            }
-
-            if (isWhite ? piece == N : piece == n)
-            {
-                while (bitboard != 0)
-                {
-                    sourceSquare = BitboardOperations.GetLs1bIndex(bitboard);
-                    attacks = knightAttacks[sourceSquare] & enemyOcc;
-
-                    while (attacks != 0)
-                    {
-                        targetSquare = BitboardOperations.GetLs1bIndex(attacks);
-                        AddMove(ref moveList, EncodeMove(sourceSquare, targetSquare, piece, 0, 1, 0, 0, 0));
-                        BitboardOperations.PopBit(ref attacks, targetSquare);
-                    }
-
-                    BitboardOperations.PopBit(ref bitboard, sourceSquare);
-                }
-            }
-
-            if (isWhite ? piece == B : piece == b)
-            {
-                while (bitboard != 0)
-                {
-                    sourceSquare = BitboardOperations.GetLs1bIndex(bitboard);
-                    attacks = GetBishopAttacks(sourceSquare, bothOcc) & enemyOcc;
-
-                    while (attacks != 0)
-                    {
-                        targetSquare = BitboardOperations.GetLs1bIndex(attacks);
-                        AddMove(ref moveList, EncodeMove(sourceSquare, targetSquare, piece, 0, 1, 0, 0, 0));
-                        BitboardOperations.PopBit(ref attacks, targetSquare);
-                    }
-
-                    BitboardOperations.PopBit(ref bitboard, sourceSquare);
-                }
-            }
-
-            if (isWhite ? piece == R : piece == r)
-            {
-                while (bitboard != 0)
-                {
-                    sourceSquare = BitboardOperations.GetLs1bIndex(bitboard);
-                    attacks = GetRookAttacks(sourceSquare, bothOcc) & enemyOcc;
-
-                    while (attacks != 0)
-                    {
-                        targetSquare = BitboardOperations.GetLs1bIndex(attacks);
-                        AddMove(ref moveList, EncodeMove(sourceSquare, targetSquare, piece, 0, 1, 0, 0, 0));
-                        BitboardOperations.PopBit(ref attacks, targetSquare);
-                    }
-
-                    BitboardOperations.PopBit(ref bitboard, sourceSquare);
-                }
-            }
-
-            if (isWhite ? piece == Q : piece == q)
-            {
-                while (bitboard != 0)
-                {
-                    sourceSquare = BitboardOperations.GetLs1bIndex(bitboard);
-                    attacks = GetQueenAttacks(sourceSquare, bothOcc) & enemyOcc;
-
-                    while (attacks != 0)
-                    {
-                        targetSquare = BitboardOperations.GetLs1bIndex(attacks);
-                        AddMove(ref moveList, EncodeMove(sourceSquare, targetSquare, piece, 0, 1, 0, 0, 0));
-                        BitboardOperations.PopBit(ref attacks, targetSquare);
-                    }
-
-                    BitboardOperations.PopBit(ref bitboard, sourceSquare);
-                }
-            }
-
-            if (isWhite ? piece == K : piece == k)
-            {
-                while (bitboard != 0)
-                {
-                    sourceSquare = BitboardOperations.GetLs1bIndex(bitboard);
-                    attacks = kingAttacks[sourceSquare] & enemyOcc;
-
-                    while (attacks != 0)
-                    {
-                        targetSquare = BitboardOperations.GetLs1bIndex(attacks);
-                        AddMove(ref moveList, EncodeMove(sourceSquare, targetSquare, piece, 0, 1, 0, 0, 0));
-                        BitboardOperations.PopBit(ref attacks, targetSquare);
-                    }
-
-                    BitboardOperations.PopBit(ref bitboard, sourceSquare);
-                }
-            }
-        }
-    }
+    // =========================================================================
+    //  Move List Helper
+    // =========================================================================
 
     public static void AddMove(ref MoveList moveList, int move)
     {
         moveList.moves[moveList.count] = move;
         moveList.count++;
     }
+
+    // =========================================================================
+    //  Make Move
+    // =========================================================================
+    //
+    //  Applies a move to the board and updates Zobrist hash incrementally.
+    //  Returns 1 if the move is legal (own king not left in check), 0 otherwise.
+    //  When returning 0, the board state is NOT restored — the caller must
+    //  TakeBack using the BoardState snapshot taken before MakeMove.
+    //
 
     public static int MakeMove(int move, int moveFlag)
     {
@@ -526,8 +362,8 @@ public static class MoveGenerator
             BitboardOperations.PopBit(ref bitboards[piece], sourceSquare);
             BitboardOperations.SetBit(ref bitboards[piece], targetSquare);
 
-            Zobrist.hashKey ^= Zobrist.pieceKeys[piece, sourceSquare];    // remove piece from source square in hash key
-            Zobrist.hashKey ^= Zobrist.pieceKeys[piece, targetSquare];    // set piece to the target square in hash key
+            Zobrist.hashKey ^= Zobrist.pieceKeys[piece, sourceSquare];
+            Zobrist.hashKey ^= Zobrist.pieceKeys[piece, targetSquare];
 
             if (capture != 0)
             {
@@ -551,37 +387,28 @@ public static class MoveGenerator
                 if (isWhite)
                 {
                     BitboardOperations.PopBit(ref bitboards[P], targetSquare);
-                    Zobrist.hashKey ^= Zobrist.pieceKeys[P, targetSquare];  // remove pawn from target square in hash key
+                    Zobrist.hashKey ^= Zobrist.pieceKeys[P, targetSquare];
                 }
                 else
                 {
                     BitboardOperations.PopBit(ref bitboards[p], targetSquare);
-                    Zobrist.hashKey ^= Zobrist.pieceKeys[p, targetSquare];  // remove pawn from target square in hash key
+                    Zobrist.hashKey ^= Zobrist.pieceKeys[p, targetSquare];
                 }
 
                 BitboardOperations.SetBit(ref bitboards[promotedPiece], targetSquare);
-                Zobrist.hashKey ^= Zobrist.pieceKeys[promotedPiece, targetSquare];  // add promoted piece to target square in hash key
+                Zobrist.hashKey ^= Zobrist.pieceKeys[promotedPiece, targetSquare];
             }
 
             if (GetMoveEnpassant(move) != 0)
             {
-                // white to move
                 if (isWhite)
                 {
-                    // remove captured pawn
                     BitboardOperations.PopBit(ref bitboards[p], targetSquare + 8);
-
-                    // remove pawn from hash key
                     Zobrist.hashKey ^= Zobrist.pieceKeys[p, targetSquare + 8];
                 }
-
-                // black to move
                 else
                 {
-                    // remove captured pawn
                     BitboardOperations.PopBit(ref bitboards[P], targetSquare - 8);
-
-                    // remove pawn from hash key
                     Zobrist.hashKey ^= Zobrist.pieceKeys[P, targetSquare - 8];
                 }
             }
@@ -592,15 +419,11 @@ public static class MoveGenerator
                 if (isWhite)
                 {
                     enPassant = targetSquare + 8;
-
-                    // hash enpassant
                     Zobrist.hashKey ^= Zobrist.enpassantKeys[targetSquare + 8];
                 }
                 else
                 {
                     enPassant = targetSquare - 8;
-
-                    // hash enpassant
                     Zobrist.hashKey ^= Zobrist.enpassantKeys[targetSquare - 8];
                 }
             }
@@ -612,36 +435,36 @@ public static class MoveGenerator
                     case g1:
                         BitboardOperations.PopBit(ref bitboards[R], (int)h1);
                         BitboardOperations.SetBit(ref bitboards[R], (int)f1);
-                        // hash rook
-                        Zobrist.hashKey ^= Zobrist.pieceKeys[R, (int)h1];  // remove rook from h1 from hash key
-                        Zobrist.hashKey ^= Zobrist.pieceKeys[R, (int)f1];  // put rook on f1 into a hash key
+                        Zobrist.hashKey ^= Zobrist.pieceKeys[R, (int)h1];
+                        Zobrist.hashKey ^= Zobrist.pieceKeys[R, (int)f1];
                         break;
                     case c1:
                         BitboardOperations.PopBit(ref bitboards[R], (int)a1);
                         BitboardOperations.SetBit(ref bitboards[R], (int)d1);
-                        Zobrist.hashKey ^= Zobrist.pieceKeys[R, (int)a1];  // remove rook from a1 from hash key
-                        Zobrist.hashKey ^= Zobrist.pieceKeys[R, (int)d1];  // put rook on d1 into a hash key
+                        Zobrist.hashKey ^= Zobrist.pieceKeys[R, (int)a1];
+                        Zobrist.hashKey ^= Zobrist.pieceKeys[R, (int)d1];
                         break;
                     case g8:
                         BitboardOperations.PopBit(ref bitboards[r], (int)h8);
                         BitboardOperations.SetBit(ref bitboards[r], (int)f8);
-                        Zobrist.hashKey ^= Zobrist.pieceKeys[r, (int)h8];  // remove rook from h8 from hash key
-                        Zobrist.hashKey ^= Zobrist.pieceKeys[r, (int)f8];  // put rook on f8 into a hash key
+                        Zobrist.hashKey ^= Zobrist.pieceKeys[r, (int)h8];
+                        Zobrist.hashKey ^= Zobrist.pieceKeys[r, (int)f8];
                         break;
                     case c8:
                         BitboardOperations.PopBit(ref bitboards[r], (int)a8);
                         BitboardOperations.SetBit(ref bitboards[r], (int)d8);
-                        Zobrist.hashKey ^= Zobrist.pieceKeys[r, (int)a8];  // remove rook from a8 from hash key
-                        Zobrist.hashKey ^= Zobrist.pieceKeys[r, (int)d8];  // put rook on d8 into a hash key
+                        Zobrist.hashKey ^= Zobrist.pieceKeys[r, (int)a8];
+                        Zobrist.hashKey ^= Zobrist.pieceKeys[r, (int)d8];
                         break;
                 }
             }
-            Zobrist.hashKey ^= Zobrist.castleKeys[castle];  // hash castling
+
+            Zobrist.hashKey ^= Zobrist.castleKeys[castle];
 
             castle &= castlingRights[sourceSquare];
             castle &= castlingRights[targetSquare];
 
-            Zobrist.hashKey ^= Zobrist.castleKeys[castle];  // hash castling
+            Zobrist.hashKey ^= Zobrist.castleKeys[castle];
 
             UpdateOccupancies();
 
