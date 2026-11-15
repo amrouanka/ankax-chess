@@ -40,9 +40,9 @@ public static class MoveEncoding
 
     public static string GetMove(int move)
     {
-        return $"{Board.squareToCoordinates[GetMoveSource(move)]}" +
-               $"{Board.squareToCoordinates[GetMoveTarget(move)]}" +
-               $"{Board.promotedPieces[GetMovePromoted(move)]}";
+        return $"{squareToCoordinates[GetMoveSource(move)]}" +
+               $"{squareToCoordinates[GetMoveTarget(move)]}" +
+               $"{promotedPieces[GetMovePromoted(move)]}";
     }
 
     public static void PrintMove(int move) => Console.WriteLine(GetMove(move));
