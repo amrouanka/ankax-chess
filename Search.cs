@@ -24,10 +24,19 @@ using static MoveGenerator;
 //    ✓ Fail-soft return values
 //
 //  Move ordering (highest to lowest priority):
-//    TT move (30000) → Q-promotion (29000) → PV move (20000) →
-//    MVV-LVA (10000+) → Killer 1 (9000) → Killer 2 (8000) →
-//    Counter-move (7800) → Castling (7500) → Other promotions (7200) →
-//    History + Continuation (-7000..+7000)
+//
+//    Tier 1: TT move         10,000,000
+//    Tier 2: Q-promotion      9,000,000
+//    Tier 3: PV move          8,000,000
+//    Tier 4: Captures         1,000,100 .. 1,000,605   (MVV-LVA)
+//            ─── gap: 83,716 ───
+//    Tier 5: Killer 1           900,000
+//            Killer 2           800,000
+//    Tier 6: Counter-move       700,000
+//    Tier 7: Castling           600,000
+//            Underpromotion     500,000
+//            ─── gap: 483,616 ───
+//    Tier 8: History           -16,384 .. +16,384      (gravity-bounded)
 //
 //  Performance techniques used:
 //    1. Flat arrays with bit-shift indexing (avoids multi-dim bounds checks)
@@ -975,6 +984,9 @@ public static class Search
     /// <summary>
     /// Assigns a priority score to a single move for ordering.
     /// Higher score = searched first.
+    ///
+    /// Tiers are separated by gaps of at least 80,000 to prevent
+    /// history scores from contaminating heuristic ordering.
     /// </summary>
     private static int ScoreMove(
         int move,
@@ -985,32 +997,47 @@ public static class Search
         int counterMove,
         int prevContRowBase)
     {
-        if (move == ttMove) return 30000;
+        // Tier 1: TT move — unconditional first
+        if (move == ttMove) return 10_000_000;
 
         int promoted = GetMovePromoted(move);
-        if (promoted == Q || promoted == q) return 29000;
-        if (move == pvMove) return 20000;
+
+        // Tier 2: Queen promotion — gaining a queen is almost always best
+        if (promoted == Q || promoted == q) return 9_000_000;
+
+        // Tier 3: PV move — previous iteration's best (root only, pvMove=0 elsewhere)
+        if (move == pvMove) return 8_000_000;
 
         int target = GetMoveTarget(move);
 
+        // Tier 4: Captures — MVV-LVA ensures PxQ > QxP (prefer capturing with less valuable piece)
+        // Range: 1,000,100 (KxP) to 1,000,605 (PxQ)
         if (GetMoveCapture(move) != 0)
         {
             int piece = GetMovePiece(move);
             int victim = GetPieceAtSquare(target);
-            return mvvLvaTable[(piece << PieceShift) | victim] + 10000;
+            return mvvLvaTable[(piece << PieceShift) | victim] + 1_000_000;
         }
 
-        if (move == killer1) return 9000;
-        if (move == killer2) return 8000;
-        if (move == counterMove) return 7800;
-        if (GetMoveCastling(move) != 0) return 7500;
-        if (promoted != 0) return 7200;
+        // Tier 5: Killers — quiet moves that caused beta cutoff at this ply before
+        if (move == killer1) return 900_000;
+        if (move == killer2) return 800_000;
 
+        // Tier 6: Counter-move — best quiet reply to the opponent's previous move
+        if (move == counterMove) return 700_000;
+
+        // Tier 7a: Castling — strategically important quiet move
+        if (GetMoveCastling(move) != 0) return 600_000;
+
+        // Tier 7b: Underpromotion — rare and usually inferior to Q-promo
+        if (promoted != 0) return 500_000;
+
+        // Tier 8: History + continuation — gravity-bounded to ±MaxHistory (16,384)
         int currIndex = (GetMovePiece(move) << HistoryShift) | target;
         int history = historyMoves[currIndex];
         if (prevContRowBase >= 0)
             history += contHistory[prevContRowBase + currIndex];
-        return Math.Clamp(history, -7000, 7000);
+        return Math.Clamp(history, -MaxHistory, MaxHistory);
     }
 
     // =========================================================================
