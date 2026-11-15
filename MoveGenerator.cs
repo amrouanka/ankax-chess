@@ -365,7 +365,7 @@ public static class MoveGenerator
             Zobrist.hashKey ^= Zobrist.pieceKeys[piece, sourceSquare];
             Zobrist.hashKey ^= Zobrist.pieceKeys[piece, targetSquare];
 
-            if (capture != 0)
+            if (capture != 0 && GetMoveEnpassant(move) == 0)
             {
                 int startPiece = isWhite ? p : P;
                 int endPiece = isWhite ? k : K;
