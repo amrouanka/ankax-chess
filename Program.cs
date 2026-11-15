@@ -120,12 +120,12 @@ internal static class Program
 
             if (MakeMove(moveList.moves[i], (int)allMoves) == 0)
             {
-                Board.TakeBack(state);
+                Board.TakeBack(ref state);
                 continue;
             }
 
             nodes += PerftDriver(depth - 1);
-            Board.TakeBack(state);
+            Board.TakeBack(ref state);
         }
 
         return nodes;
@@ -154,13 +154,13 @@ internal static class Program
 
             if (MakeMove(moveList.moves[i], (int)allMoves) == 0)
             {
-                Board.TakeBack(state);
+                Board.TakeBack(ref state);
                 continue;
             }
 
             long nodesForMove = depth == 1 ? 1 : PerftDriver(depth - 1);
             totalNodes += nodesForMove;
-            Board.TakeBack(state);
+            Board.TakeBack(ref state);
 
             Console.WriteLine($"     {MoveEncoding.GetMove(moveList.moves[i]),-6} : {nodesForMove}");
         }

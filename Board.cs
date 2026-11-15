@@ -2,6 +2,7 @@ using static CastlingRights;
 using static Square;
 using static MoveGenerator;
 using System.Numerics;
+using System.Runtime.InteropServices;
 
 // =============================================================================
 //  Bitboard helpers — inlined here since they're tiny and used everywhere.
@@ -66,6 +67,7 @@ public static class Board
 
     public static ulong[] bitboards = new ulong[12];
     public static ulong[] occupancies = new ulong[3];
+    public static int[] mailbox = new int[64];  // MAILBOX: -1 = empty, 0-11 = piece
     public static int side;
     public static int enPassant = (int)noSquare;
     public static int castle;
@@ -142,6 +144,20 @@ public static class Board
             halfmoveClock = 0;
 
         UpdateOccupancies();
+
+        // MAILBOX: build from bitboards
+        Array.Fill(mailbox, -1);
+        for (int piece = P; piece <= k; piece++)
+        {
+            ulong bb = bitboards[piece];
+            while (bb != 0)
+            {
+                int sq = BitboardOperations.GetLs1bIndex(bb);
+                mailbox[sq] = piece;
+                bb &= bb - 1;  // pop LSB (faster than PopBit for local variable)
+            }
+        }
+
         Zobrist.hashKey = Zobrist.GenerateHashKey();
     }
 
@@ -168,7 +184,7 @@ public static class Board
 
     public static BoardState CopyBoard()
     {
-        return new BoardState
+        BoardState state = new()
         {
             bb0 = bitboards[0],
             bb1 = bitboards[1],
@@ -187,16 +203,22 @@ public static class Board
             occ1 = occupancies[1],
             occ2 = occupancies[2],
 
-            side = Board.side,
-            enPassant = Board.enPassant,
-            castle = Board.castle,
-            halfmoveClock = Board.halfmoveClock,
+            side = side,
+            enPassant = enPassant,
+            castle = castle,
+            halfmoveClock = halfmoveClock,
 
             hashKey = Zobrist.hashKey
         };
+
+        // Save mailbox (256 bytes — SIMD-accelerated via Span)
+        MemoryMarshal.CreateReadOnlySpan(ref mailbox[0], 64)
+            .CopyTo(MemoryMarshal.CreateSpan(ref state.mailbox[0], 64));
+
+        return state;
     }
 
-    public static void TakeBack(BoardState state)
+    public static void TakeBack(ref BoardState state)
     {
         bitboards[0] = state.bb0; bitboards[1] = state.bb1;
         bitboards[2] = state.bb2; bitboards[3] = state.bb3;
@@ -215,6 +237,10 @@ public static class Board
         halfmoveClock = state.halfmoveClock;
 
         Zobrist.hashKey = state.hashKey;
+
+        // Restore mailbox (256 bytes — SIMD-accelerated via Span)
+        MemoryMarshal.CreateReadOnlySpan(ref state.mailbox[0], 64)
+            .CopyTo(MemoryMarshal.CreateSpan(ref mailbox[0], 64));
     }
 
     // =========================================================================

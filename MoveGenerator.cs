@@ -3,6 +3,7 @@ using static CastlingRights;
 using static MoveEncoding;
 using static PieceAttacks;
 using static Square;
+using static BitboardOperations;
 
 public static class MoveGenerator
 {
@@ -83,14 +84,14 @@ public static class MoveGenerator
         ulong pawns = bitboards[pawnPiece];
         while (pawns != 0)
         {
-            int src = BitboardOperations.GetLs1bIndex(pawns);
+            int src = GetLs1bIndex(pawns);
 
             // --- Pushes (skipped in captures-only mode) ---
             if (!capturesOnly)
             {
                 int target = src + pawnDir;
 
-                if (target >= 0 && target < 64 && !BitboardOperations.GetBit(bothOcc, target))
+                if (target >= 0 && target < 64 && !GetBit(bothOcc, target))
                 {
                     if (src >= promoFirst && src <= promoLast)
                     {
@@ -105,7 +106,7 @@ public static class MoveGenerator
 
                         // Double push from starting rank
                         if (src >= doubleFirst && src <= doubleLast &&
-                            !BitboardOperations.GetBit(bothOcc, target + pawnDir))
+                            !GetBit(bothOcc, target + pawnDir))
                         {
                             AddMove(ref moveList, EncodeMove(src, target + pawnDir, pawnPiece, 0, 0, 1, 0, 0));
                         }
@@ -117,7 +118,7 @@ public static class MoveGenerator
             ulong attacks = pawnAttacks[side, src] & enemyOcc;
             while (attacks != 0)
             {
-                int target = BitboardOperations.GetLs1bIndex(attacks);
+                int target = GetLs1bIndex(attacks);
 
                 if (src >= promoFirst && src <= promoLast)
                 {
@@ -131,7 +132,7 @@ public static class MoveGenerator
                     AddMove(ref moveList, EncodeMove(src, target, pawnPiece, 0, 1, 0, 0, 0));
                 }
 
-                BitboardOperations.PopBit(ref attacks, target);
+                PopBit(ref attacks, target);
             }
 
             // --- En passant ---
@@ -142,7 +143,7 @@ public static class MoveGenerator
                     AddMove(ref moveList, EncodeMove(src, enPassant, pawnPiece, 0, 1, 0, 1, 0));
             }
 
-            BitboardOperations.PopBit(ref pawns, src);
+            PopBit(ref pawns, src);
         }
 
         // =====================================================================
@@ -152,18 +153,18 @@ public static class MoveGenerator
         ulong knights = bitboards[knightPiece];
         while (knights != 0)
         {
-            int src = BitboardOperations.GetLs1bIndex(knights);
+            int src = GetLs1bIndex(knights);
             ulong attacks = knightAttacks[src] & targetMask;
 
             while (attacks != 0)
             {
-                int target = BitboardOperations.GetLs1bIndex(attacks);
-                int cap = BitboardOperations.GetBit(enemyOcc, target) ? 1 : 0;
+                int target = GetLs1bIndex(attacks);
+                int cap = GetBit(enemyOcc, target) ? 1 : 0;
                 AddMove(ref moveList, EncodeMove(src, target, knightPiece, 0, cap, 0, 0, 0));
-                BitboardOperations.PopBit(ref attacks, target);
+                PopBit(ref attacks, target);
             }
 
-            BitboardOperations.PopBit(ref knights, src);
+            PopBit(ref knights, src);
         }
 
         // =====================================================================
@@ -173,18 +174,18 @@ public static class MoveGenerator
         ulong bishops = bitboards[bishopPiece];
         while (bishops != 0)
         {
-            int src = BitboardOperations.GetLs1bIndex(bishops);
+            int src = GetLs1bIndex(bishops);
             ulong attacks = GetBishopAttacks(src, bothOcc) & targetMask;
 
             while (attacks != 0)
             {
-                int target = BitboardOperations.GetLs1bIndex(attacks);
-                int cap = BitboardOperations.GetBit(enemyOcc, target) ? 1 : 0;
+                int target = GetLs1bIndex(attacks);
+                int cap = GetBit(enemyOcc, target) ? 1 : 0;
                 AddMove(ref moveList, EncodeMove(src, target, bishopPiece, 0, cap, 0, 0, 0));
-                BitboardOperations.PopBit(ref attacks, target);
+                PopBit(ref attacks, target);
             }
 
-            BitboardOperations.PopBit(ref bishops, src);
+            PopBit(ref bishops, src);
         }
 
         // =====================================================================
@@ -194,18 +195,18 @@ public static class MoveGenerator
         ulong rooks = bitboards[rookPiece];
         while (rooks != 0)
         {
-            int src = BitboardOperations.GetLs1bIndex(rooks);
+            int src = GetLs1bIndex(rooks);
             ulong attacks = GetRookAttacks(src, bothOcc) & targetMask;
 
             while (attacks != 0)
             {
-                int target = BitboardOperations.GetLs1bIndex(attacks);
-                int cap = BitboardOperations.GetBit(enemyOcc, target) ? 1 : 0;
+                int target = GetLs1bIndex(attacks);
+                int cap = GetBit(enemyOcc, target) ? 1 : 0;
                 AddMove(ref moveList, EncodeMove(src, target, rookPiece, 0, cap, 0, 0, 0));
-                BitboardOperations.PopBit(ref attacks, target);
+                PopBit(ref attacks, target);
             }
 
-            BitboardOperations.PopBit(ref rooks, src);
+            PopBit(ref rooks, src);
         }
 
         // =====================================================================
@@ -215,18 +216,18 @@ public static class MoveGenerator
         ulong queens = bitboards[queenPiece];
         while (queens != 0)
         {
-            int src = BitboardOperations.GetLs1bIndex(queens);
+            int src = GetLs1bIndex(queens);
             ulong attacks = GetQueenAttacks(src, bothOcc) & targetMask;
 
             while (attacks != 0)
             {
-                int target = BitboardOperations.GetLs1bIndex(attacks);
-                int cap = BitboardOperations.GetBit(enemyOcc, target) ? 1 : 0;
+                int target = GetLs1bIndex(attacks);
+                int cap = GetBit(enemyOcc, target) ? 1 : 0;
                 AddMove(ref moveList, EncodeMove(src, target, queenPiece, 0, cap, 0, 0, 0));
-                BitboardOperations.PopBit(ref attacks, target);
+                PopBit(ref attacks, target);
             }
 
-            BitboardOperations.PopBit(ref queens, src);
+            PopBit(ref queens, src);
         }
 
         // =====================================================================
@@ -236,18 +237,18 @@ public static class MoveGenerator
         ulong kings = bitboards[kingPiece];
         while (kings != 0)
         {
-            int src = BitboardOperations.GetLs1bIndex(kings);
+            int src = GetLs1bIndex(kings);
             ulong attacks = kingAttacks[src] & targetMask;
 
             while (attacks != 0)
             {
-                int target = BitboardOperations.GetLs1bIndex(attacks);
-                int cap = BitboardOperations.GetBit(enemyOcc, target) ? 1 : 0;
+                int target = GetLs1bIndex(attacks);
+                int cap = GetBit(enemyOcc, target) ? 1 : 0;
                 AddMove(ref moveList, EncodeMove(src, target, kingPiece, 0, cap, 0, 0, 0));
-                BitboardOperations.PopBit(ref attacks, target);
+                PopBit(ref attacks, target);
             }
 
-            BitboardOperations.PopBit(ref kings, src);
+            PopBit(ref kings, src);
         }
 
         // =====================================================================
@@ -262,8 +263,8 @@ public static class MoveGenerator
             {
                 // Kingside: e1-g1, rook h1-f1
                 if ((castle & (int)wk) != 0 &&
-                    !BitboardOperations.GetBit(bothOcc, (int)f1) &&
-                    !BitboardOperations.GetBit(bothOcc, (int)g1) &&
+                    !GetBit(bothOcc, (int)f1) &&
+                    !GetBit(bothOcc, (int)g1) &&
                     !IsSquareAttacked((int)e1, enemySide) &&
                     !IsSquareAttacked((int)f1, enemySide))
                 {
@@ -272,9 +273,9 @@ public static class MoveGenerator
 
                 // Queenside: e1-c1, rook a1-d1
                 if ((castle & (int)wq) != 0 &&
-                    !BitboardOperations.GetBit(bothOcc, (int)d1) &&
-                    !BitboardOperations.GetBit(bothOcc, (int)c1) &&
-                    !BitboardOperations.GetBit(bothOcc, (int)b1) &&
+                    !GetBit(bothOcc, (int)d1) &&
+                    !GetBit(bothOcc, (int)c1) &&
+                    !GetBit(bothOcc, (int)b1) &&
                     !IsSquareAttacked((int)e1, enemySide) &&
                     !IsSquareAttacked((int)d1, enemySide))
                 {
@@ -285,8 +286,8 @@ public static class MoveGenerator
             {
                 // Kingside: e8-g8, rook h8-f8
                 if ((castle & (int)bk) != 0 &&
-                    !BitboardOperations.GetBit(bothOcc, (int)f8) &&
-                    !BitboardOperations.GetBit(bothOcc, (int)g8) &&
+                    !GetBit(bothOcc, (int)f8) &&
+                    !GetBit(bothOcc, (int)g8) &&
                     !IsSquareAttacked((int)e8, enemySide) &&
                     !IsSquareAttacked((int)f8, enemySide))
                 {
@@ -295,9 +296,9 @@ public static class MoveGenerator
 
                 // Queenside: e8-c8, rook a8-d8
                 if ((castle & (int)bq) != 0 &&
-                    !BitboardOperations.GetBit(bothOcc, (int)d8) &&
-                    !BitboardOperations.GetBit(bothOcc, (int)c8) &&
-                    !BitboardOperations.GetBit(bothOcc, (int)b8) &&
+                    !GetBit(bothOcc, (int)d8) &&
+                    !GetBit(bothOcc, (int)c8) &&
+                    !GetBit(bothOcc, (int)b8) &&
                     !IsSquareAttacked((int)e8, enemySide) &&
                     !IsSquareAttacked((int)d8, enemySide))
                 {
@@ -331,7 +332,6 @@ public static class MoveGenerator
     //  Returns 1 if the move is legal (own king not left in check), 0 otherwise.
     //  When returning 0, the board state is NOT restored — the caller must
     //  TakeBack using the BoardState snapshot taken before MakeMove.
-    //
 
     public static int MakeMove(int move, int moveFlag)
     {
@@ -358,61 +358,62 @@ public static class MoveGenerator
 
             int sourceSquare = GetMoveSource(move);
             int targetSquare = GetMoveTarget(move);
+            int capturedPiece = mailbox[targetSquare];
 
-            BitboardOperations.PopBit(ref bitboards[piece], sourceSquare);
-            BitboardOperations.SetBit(ref bitboards[piece], targetSquare);
+            // --- Move the piece ---
+            PopBit(ref bitboards[piece], sourceSquare);
+            SetBit(ref bitboards[piece], targetSquare);
+            mailbox[sourceSquare] = -1;       // MAILBOX: piece leaves source
+            mailbox[targetSquare] = piece;    // MAILBOX: piece arrives at target
 
             Zobrist.hashKey ^= Zobrist.pieceKeys[piece, sourceSquare];
             Zobrist.hashKey ^= Zobrist.pieceKeys[piece, targetSquare];
 
-            if (capture != 0)
+            // --- Capture ---
+            if (capture != 0 && GetMoveEnpassant(move) == 0)
             {
-                int startPiece = isWhite ? p : P;
-                int endPiece = isWhite ? k : K;
-
-                for (int bbPiece = startPiece; bbPiece <= endPiece; bbPiece++)
-                {
-                    if (BitboardOperations.GetBit(bitboards[bbPiece], targetSquare))
-                    {
-                        BitboardOperations.PopBit(ref bitboards[bbPiece], targetSquare);
-                        Zobrist.hashKey ^= Zobrist.pieceKeys[bbPiece, targetSquare];
-                        break;
-                    }
-                }
+                PopBit(ref bitboards[capturedPiece], targetSquare);
+                Zobrist.hashKey ^= Zobrist.pieceKeys[capturedPiece, targetSquare];
             }
 
+            // --- Promotion ---
             int promotedPiece = GetMovePromoted(move);
             if (promotedPiece != 0)
             {
                 if (isWhite)
                 {
-                    BitboardOperations.PopBit(ref bitboards[P], targetSquare);
+                    PopBit(ref bitboards[P], targetSquare);
                     Zobrist.hashKey ^= Zobrist.pieceKeys[P, targetSquare];
                 }
                 else
                 {
-                    BitboardOperations.PopBit(ref bitboards[p], targetSquare);
+                    PopBit(ref bitboards[p], targetSquare);
                     Zobrist.hashKey ^= Zobrist.pieceKeys[p, targetSquare];
                 }
 
-                BitboardOperations.SetBit(ref bitboards[promotedPiece], targetSquare);
+                SetBit(ref bitboards[promotedPiece], targetSquare);
                 Zobrist.hashKey ^= Zobrist.pieceKeys[promotedPiece, targetSquare];
+                mailbox[targetSquare] = promotedPiece;  // MAILBOX: pawn → promoted piece
             }
 
+            // --- En passant ---
             if (GetMoveEnpassant(move) != 0)
             {
                 if (isWhite)
                 {
-                    BitboardOperations.PopBit(ref bitboards[p], targetSquare + 8);
+                    PopBit(ref bitboards[p], targetSquare + 8);
                     Zobrist.hashKey ^= Zobrist.pieceKeys[p, targetSquare + 8];
+                    mailbox[targetSquare + 8] = -1;  // MAILBOX: remove captured black pawn
                 }
                 else
                 {
-                    BitboardOperations.PopBit(ref bitboards[P], targetSquare - 8);
+                    PopBit(ref bitboards[P], targetSquare - 8);
                     Zobrist.hashKey ^= Zobrist.pieceKeys[P, targetSquare - 8];
+                    mailbox[targetSquare - 8] = -1;  // MAILBOX: remove captured white pawn
                 }
             }
 
+            // --- Double push ---
             int doublePush = GetMoveDouble(move);
             if (doublePush != 0)
             {
@@ -426,35 +427,45 @@ public static class MoveGenerator
                     enPassant = targetSquare - 8;
                     Zobrist.hashKey ^= Zobrist.enpassantKeys[targetSquare - 8];
                 }
+                // MAILBOX: no update needed — no piece is added or removed
             }
 
+            // --- Castling ---
             if (GetMoveCastling(move) != 0)
             {
                 switch ((Square)targetSquare)
                 {
                     case g1:
-                        BitboardOperations.PopBit(ref bitboards[R], (int)h1);
-                        BitboardOperations.SetBit(ref bitboards[R], (int)f1);
+                        PopBit(ref bitboards[R], (int)h1);
+                        SetBit(ref bitboards[R], (int)f1);
                         Zobrist.hashKey ^= Zobrist.pieceKeys[R, (int)h1];
                         Zobrist.hashKey ^= Zobrist.pieceKeys[R, (int)f1];
+                        mailbox[(int)h1] = -1;  // MAILBOX: rook leaves h1
+                        mailbox[(int)f1] = R;   // MAILBOX: rook arrives f1
                         break;
                     case c1:
-                        BitboardOperations.PopBit(ref bitboards[R], (int)a1);
-                        BitboardOperations.SetBit(ref bitboards[R], (int)d1);
+                        PopBit(ref bitboards[R], (int)a1);
+                        SetBit(ref bitboards[R], (int)d1);
                         Zobrist.hashKey ^= Zobrist.pieceKeys[R, (int)a1];
                         Zobrist.hashKey ^= Zobrist.pieceKeys[R, (int)d1];
+                        mailbox[(int)a1] = -1;  // MAILBOX: rook leaves a1
+                        mailbox[(int)d1] = R;   // MAILBOX: rook arrives d1
                         break;
                     case g8:
-                        BitboardOperations.PopBit(ref bitboards[r], (int)h8);
-                        BitboardOperations.SetBit(ref bitboards[r], (int)f8);
+                        PopBit(ref bitboards[r], (int)h8);
+                        SetBit(ref bitboards[r], (int)f8);
                         Zobrist.hashKey ^= Zobrist.pieceKeys[r, (int)h8];
                         Zobrist.hashKey ^= Zobrist.pieceKeys[r, (int)f8];
+                        mailbox[(int)h8] = -1;  // MAILBOX: rook leaves h8
+                        mailbox[(int)f8] = r;   // MAILBOX: rook arrives f8
                         break;
                     case c8:
-                        BitboardOperations.PopBit(ref bitboards[r], (int)a8);
-                        BitboardOperations.SetBit(ref bitboards[r], (int)d8);
+                        PopBit(ref bitboards[r], (int)a8);
+                        SetBit(ref bitboards[r], (int)d8);
                         Zobrist.hashKey ^= Zobrist.pieceKeys[r, (int)a8];
                         Zobrist.hashKey ^= Zobrist.pieceKeys[r, (int)d8];
+                        mailbox[(int)a8] = -1;  // MAILBOX: rook leaves a8
+                        mailbox[(int)d8] = r;   // MAILBOX: rook arrives d8
                         break;
                 }
             }
@@ -472,8 +483,8 @@ public static class MoveGenerator
             Zobrist.hashKey ^= Zobrist.sideKey;
 
             int kingSquare = isWhite
-                ? BitboardOperations.GetLs1bIndex(bitboards[K])
-                : BitboardOperations.GetLs1bIndex(bitboards[k]);
+                ? GetLs1bIndex(bitboards[K])
+                : GetLs1bIndex(bitboards[k]);
 
             if (IsSquareAttacked(kingSquare, side))
                 return 0;

@@ -431,11 +431,11 @@ public static class Search
 
                 if (MakeMove(move, AllMoves) == 0)
                 {
-                    TakeBack(state);
+                    TakeBack(ref state);
                     continue;
                 }
 
-                TakeBack(state);
+                TakeBack(ref state);
                 bestMove = move;
                 break;
             }
@@ -578,7 +578,7 @@ public static class Search
             ply++;
             int nullMoveScore = -AlphaBeta(-beta, -beta + 1, depth - 1 - reduction, false);
             ply--;
-            TakeBack(nullMoveState);
+            TakeBack(ref nullMoveState);
 
             if (TimeManagement.stopped)
                 return 0;
@@ -671,7 +671,7 @@ public static class Search
             BoardState state = CopyBoard();
             if (MakeMove(move, AllMoves) == 0)
             {
-                TakeBack(state);
+                TakeBack(ref state);
                 continue;
             }
 
@@ -726,7 +726,7 @@ public static class Search
 
             ply--;
             repetitionIndex--;
-            TakeBack(state);
+            TakeBack(ref state);
 
             if (TimeManagement.stopped)
                 return 0;
@@ -896,7 +896,7 @@ public static class Search
             BoardState state = CopyBoard();
             if (MakeMove(move, AllMoves) == 0)
             {
-                TakeBack(state);
+                TakeBack(ref state);
                 continue;
             }
 
@@ -904,7 +904,7 @@ public static class Search
             ply++;
             int score = -Quiescence(-beta, -alpha);
             ply--;
-            TakeBack(state);
+            TakeBack(ref state);
 
             if (TimeManagement.stopped)
                 return 0;
@@ -1084,26 +1084,7 @@ public static class Search
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static int GetPieceAtSquare(int square)
-    {
-        ulong mask = 1UL << square;
-        ulong[] boards = bitboards;  // Cache reference for 12 sequential reads
-
-        if ((boards[P] & mask) != 0) return P;
-        if ((boards[p] & mask) != 0) return p;
-        if ((boards[N] & mask) != 0) return N;
-        if ((boards[n] & mask) != 0) return n;
-        if ((boards[B] & mask) != 0) return B;
-        if ((boards[b] & mask) != 0) return b;
-        if ((boards[R] & mask) != 0) return R;
-        if ((boards[r] & mask) != 0) return r;
-        if ((boards[Q] & mask) != 0) return Q;
-        if ((boards[q] & mask) != 0) return q;
-        if ((boards[K] & mask) != 0) return K;
-        if ((boards[k] & mask) != 0) return k;
-
-        return 0;
-    }
+    private static int GetPieceAtSquare(int square) => mailbox[square];
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static bool HasNonPawnMaterial(int sideToCheck)
