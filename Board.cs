@@ -2,7 +2,6 @@ using static CastlingRights;
 using static Square;
 using static MoveGenerator;
 using System.Numerics;
-using System.Runtime.InteropServices;
 
 // =============================================================================
 //  Bitboard helpers — inlined here since they're tiny and used everywhere.
@@ -211,9 +210,9 @@ public static class Board
             hashKey = Zobrist.hashKey
         };
 
-        // Save mailbox (256 bytes — SIMD-accelerated via Span)
-        MemoryMarshal.CreateReadOnlySpan(ref mailbox[0], 64)
-            .CopyTo(MemoryMarshal.CreateSpan(ref state.mailbox[0], 64));
+        // Save mailbox (256 bytes — JIT will vectorize this)
+        for (int i = 0; i < 64; i++)
+            state.mailbox[i] = mailbox[i];
 
         return state;
     }
@@ -238,9 +237,9 @@ public static class Board
 
         Zobrist.hashKey = state.hashKey;
 
-        // Restore mailbox (256 bytes — SIMD-accelerated via Span)
-        MemoryMarshal.CreateReadOnlySpan(ref state.mailbox[0], 64)
-            .CopyTo(MemoryMarshal.CreateSpan(ref mailbox[0], 64));
+        // Restore mailbox (256 bytes — JIT will vectorize this)
+        for (int i = 0; i < 64; i++)
+            mailbox[i] = state.mailbox[i];
     }
 
     // =========================================================================
