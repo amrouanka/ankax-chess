@@ -3,7 +3,7 @@ using static Square;
 using static MoveGenerator;
 
 // =============================================================================
-//  Bitboard helpers — inlined here since they're tiny and used everywhere.
+//  Bitboard helpers — single-instruction wrappers inlined by the JIT.
 // =============================================================================
 
 public static class BitboardOperations
@@ -13,7 +13,11 @@ public static class BitboardOperations
 }
 
 // =============================================================================
-//  Board state, FEN parsing, copy/takeback
+//  Board state, FEN parsing, copy/takeback.
+//
+//  All state is stored in static fields for fast access from the hot search
+//  loop. This means the engine is single-threaded — a deliberate trade-off
+//  for simplicity at the current stage.
 // =============================================================================
 
 public static class Board
@@ -39,10 +43,14 @@ public static class Board
         ['k'] = k
     };
 
+    /// <summary>
+    /// Maps piece codes to lowercase promotion characters.
+    /// Indices 0–5 (white P–K) and 6–11 (black p–k); only N/B/R/Q are valid.
+    /// </summary>
     public static readonly char[] promotedPieces =
     [
-        ' ', 'n', 'b', 'r', 'q', ' ',   // white pieces P..K
-        ' ', 'n', 'b', 'r', 'q', ' '    // black pieces p..k
+        ' ', 'n', 'b', 'r', 'q', ' ',   // white P..K
+        ' ', 'n', 'b', 'r', 'q', ' '    // black p..k
     ];
 
     public static readonly string[] squareToCoordinates =
@@ -62,7 +70,7 @@ public static class Board
     public static int side;
     public static int enPassant = (int)noSquare;
     public static int castle;
-    public static int halfmoveClock = 0;
+    public static int halfmoveClock;
 
     // =========================================================================
     //  FEN Parsing
@@ -157,22 +165,21 @@ public static class Board
             bb9 = bitboards[9],
             bb10 = bitboards[10],
             bb11 = bitboards[11],
-
             occ0 = occupancies[0],
             occ1 = occupancies[1],
             occ2 = occupancies[2],
-
             side = side,
             enPassant = enPassant,
             castle = castle,
             halfmoveClock = halfmoveClock,
-
             hashKey = Zobrist.hashKey
         };
     }
 
-    // 'in' passes a readonly reference instead of copying ~144 bytes per call.
-    // At 119M perft nodes this avoids ~16 GB of redundant struct copies.
+    /// <summary>
+    /// Restores the board from a snapshot. The 'in' parameter passes a readonly
+    /// reference, avoiding a ~144-byte struct copy per call.
+    /// </summary>
     public static void TakeBack(in BoardState state)
     {
         bitboards[0] = state.bb0; bitboards[1] = state.bb1;

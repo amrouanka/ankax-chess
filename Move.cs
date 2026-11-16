@@ -4,14 +4,15 @@ using static Board;
 //  Move encoding — packs all move info into a single 32-bit int.
 //
 //  Bit layout:
-//    0-5   source square    (6 bits, 0-63)
-//    6-11  target square    (6 bits, 0-63)
-//    12-15 piece            (4 bits, 0-11)
-//    16-19 promoted piece   (4 bits, 0-11, 0 = no promotion)
+//    0–5   source square    (6 bits, 0–63)
+//    6–11  target square    (6 bits, 0–63)
+//    12–15 piece            (4 bits, 0–11)
+//    16–19 promoted piece   (4 bits, 0–11; 0 = no promotion)
 //    20    capture flag     (1 bit)
 //    21    double push flag (1 bit)
 //    22    en passant flag  (1 bit)
 //    23    castling flag    (1 bit)
+//    24–31 unused
 // =============================================================================
 
 public static class MoveEncoding
@@ -38,6 +39,7 @@ public static class MoveEncoding
     public static int GetMoveEnpassant(int move) => move & 0x400000;
     public static int GetMoveCastling(int move) => move & 0x800000;
 
+    /// <summary>Returns the move in UCI long algebraic notation (e.g. "e2e4", "e7e8q").</summary>
     public static string GetMove(int move) =>
         $"{squareToCoordinates[GetMoveSource(move)]}" +
         $"{squareToCoordinates[GetMoveTarget(move)]}" +
@@ -47,8 +49,8 @@ public static class MoveEncoding
 }
 
 // =============================================================================
-//  Pre-allocated move list — avoids heap allocation during search.
-//  256 slots is the theoretical max (real max is 218 in chess).
+//  Move list — 256 slots covers the theoretical maximum of 218 legal moves.
+//  The struct is a value type but the backing arrays are heap-allocated.
 // =============================================================================
 
 public struct MoveList
@@ -66,9 +68,8 @@ public struct MoveList
 }
 
 // =============================================================================
-//  Board state snapshot — used for copy/takeback in search.
-//  Flat fields (not arrays) so the struct is a single contiguous block
-//  that copies efficiently via memcpy.
+//  Board state snapshot for copy/takeback. Flat fields (not arrays) so the
+//  struct is a single contiguous block that copies efficiently.
 // =============================================================================
 
 public struct BoardState
