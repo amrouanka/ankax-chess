@@ -1,129 +1,142 @@
 using static System.Numerics.BitOperations;
+using static Board;
+using static MoveGenerator;
+
+// =============================================================================
+//  Zobrist hashing — incremental position fingerprinting for the transposition
+//  table and repetition detection.
+//
+//  Each piece on each square, each castling-right combination, each en-passant
+//  file, and the side-to-move flag gets a unique random 64-bit key. The
+//  position hash is the XOR of all active keys. Because XOR is its own inverse,
+//  MakeMove/UnmakeMove can update the hash incrementally in O(1) by XORing
+//  out the old keys and XORing in the new ones — no full rebuild needed.
+//
+//  The random keys are generated once at startup with a xorshift32 PRNG seeded
+//  with the conventional value 1804289383 (same seed used by Stockfish and
+//  most Code-Monkey-King–lineage engines, so positions are cross-comparable
+//  during debugging).
+// =============================================================================
 
 public static class Zobrist
 {
-    // Random piece keys [piece][square]
-    public static readonly ulong[,] pieceKeys = new ulong[12, 64];
+    // =========================================================================
+    //  SECTION 1 — Key tables
+    //
+    //  All tables are filled once in the static constructor and never modified
+    //  afterwards. `pieceKeys` is a flat 1D array indexed as
+    //  `(piece << 6) | square` — the same layout used in Evaluation.cs — to
+    //  avoid the extra multiply that C# 2D arrays require on every access.
+    // =========================================================================
 
-    // Random enpassant keys [square]
+    // One random key per (piece, square) pair. 12 pieces × 64 squares = 768.
+    public static readonly ulong[] pieceKeys = new ulong[12 << 6];
+
+    // One random key per en-passant target square. Only squares on ranks 3
+    // and 6 are ever used, but 64 entries keeps the indexing trivial.
     public static readonly ulong[] enpassantKeys = new ulong[64];
 
-    // Random castling keys
+    // One random key per castling-rights combination. Castling is encoded as
+    // a 4-bit mask (KQkq), giving 16 possible values.
     public static readonly ulong[] castleKeys = new ulong[16];
 
-    // Random side key
+    // XORed into the hash when it is White's turn. Black-to-move positions
+    // omit this key, so the same piece layout with opposite sides to move
+    // produces a different hash.
     public static ulong sideKey;
 
-    // Random number generator state
-    private static uint randomState = 1804289383;
-
-    // Hash key for board position (like unique position ID)
+    // The running hash for the current board position. Updated incrementally
+    // by MakeMove/UnmakeMove; rebuilt from scratch only when loading a FEN.
     public static ulong hashKey;
 
-    static Zobrist()
-    {
-        /* In C#, a static constructor is guaranteed to be executed by the .NET runtime before any static members of the class are used  
-        for the first time. So, the moment the search algorithm calls Evaluation.Evaluate(), the runtime ensures that
-        InitializeTables() has already been run exactly once. */
+    // =========================================================================
+    //  SECTION 2 — Pseudo-random number generator (init-only)
+    //
+    //  xorshift32 by George Marsaglia. Period 2^32 − 1, passes most
+    //  statistical tests, and is more than adequate for generating hash keys
+    //  (we need ~900 random 64-bit values, not cryptographic security).
+    //  The four 16-bit slices are combined into a 64-bit key to ensure all
+    //  bit positions are well-populated.
+    // =========================================================================
 
-        InitRandomKeys();    // Initialize Zobrist hash keys
+    private static uint _rngState;
+
+    private static uint NextU32()
+    {
+        uint x = _rngState;
+        x ^= x << 13;
+        x ^= x >> 17;
+        x ^= x << 5;
+        _rngState = x;
+        return x;
     }
 
-    private static uint GetRandomU32Number()
+    private static ulong NextU64()
     {
-        // Get current state
-        uint number = randomState;
-
-        // XOR shift algorithm
-        number ^= number << 13;
-        number ^= number >> 17;
-        number ^= number << 5;
-
-        // Update random number state
-        randomState = number;
-
-        // Return random number
-        return number;
-    }
-
-    private static ulong GetRandomU64Number()
-    {
-        ulong n1, n2, n3, n4;
-
-        // Init random numbers slicing 16 bits from MS1B side
-        n1 = (ulong)GetRandomU32Number() & 0xFFFF;    // And operation to get 16 bits (0xFFFF) - first 16 bits (bits 0-15)
-        n2 = (ulong)GetRandomU32Number() & 0xFFFF;    // Second 16 bits (bits 16-31)
-        n3 = (ulong)GetRandomU32Number() & 0xFFFF;    // Third 16 bits (bits 32-47)
-        n4 = (ulong)GetRandomU32Number() & 0xFFFF;    // Fourth 16 bits (bits 48-63)
-
-        // Return random number by combining the four 16-bit parts into a 64-bit number
+        ulong n1 = NextU32() & 0xFFFF;
+        ulong n2 = NextU32() & 0xFFFF;
+        ulong n3 = NextU32() & 0xFFFF;
+        ulong n4 = NextU32() & 0xFFFF;
         return n1 | (n2 << 16) | (n3 << 32) | (n4 << 48);
     }
 
-    // Initialize random hash keys
+    // =========================================================================
+    //  SECTION 3 — Key initialization
+    //
+    //  Called once from the static constructor. Public so that test harnesses
+    //  can re-seed if needed, but normal play never calls it a second time.
+    // =========================================================================
+
+    static Zobrist() => InitRandomKeys();
+
     public static void InitRandomKeys()
     {
-        // Update pseudo random number state (its already defined but just for the sake of precaution)
-        randomState = 1804289383;
+        _rngState = 1804289383;
 
-        // Loop over piece codes (P=0 to k=11)
-        for (int piece = Board.P; piece <= Board.k; piece++)
-        {
-            // Loop over board squares
-            for (int square = 0; square < 64; square++)
-            {
-                // Init random piece keys
-                pieceKeys[piece, square] = GetRandomU64Number();
-            }
-        }
+        for (int piece = P; piece <= k; piece++)
+            for (int sq = 0; sq < 64; sq++)
+                pieceKeys[(piece << 6) | sq] = NextU64();
 
-        // Loop over board squares
-        for (int square = 0; square < 64; square++)
-        {
-            // Init random enpassant keys
-            enpassantKeys[square] = GetRandomU64Number();
-        }
+        for (int sq = 0; sq < 64; sq++)
+            enpassantKeys[sq] = NextU64();
 
-        // Loop over castling keys
-        for (int index = 0; index < 16; index++)
-        {
-            // Init castling keys
-            castleKeys[index] = GetRandomU64Number();
-        }
+        for (int i = 0; i < 16; i++)
+            castleKeys[i] = NextU64();
 
-        // Init random side key
-        sideKey = GetRandomU64Number();
+        sideKey = NextU64();
     }
 
-    // Generate hash key for current board position
+    // =========================================================================
+    //  SECTION 4 — Full hash rebuild
+    //
+    //  Walks every piece on the board and XORs its key into a fresh hash.
+    //  Used only when loading a new position (FEN/setboard). During search,
+    //  the hash is maintained incrementally — this function is never called.
+    // =========================================================================
+
     public static ulong GenerateHashKey()
     {
-        ulong hashKey = 0UL;
+        ulong key = 0;
 
-        // Hash pieces
-        for (int piece = Board.P; piece <= Board.k; piece++)
+        for (int piece = P; piece <= k; piece++)
         {
-            ulong bitboard = Board.bitboards[piece];
-
-            while (bitboard != 0)
+            ulong bb = bitboards[piece];
+            while (bb != 0)
             {
-                int square = TrailingZeroCount(bitboard);
-                hashKey ^= pieceKeys[piece, square];
-                BitboardOperations.PopBit(ref bitboard, square);
+                int sq = TrailingZeroCount(bb);
+                key ^= pieceKeys[(piece << 6) | sq];
+                bb &= bb - 1;
             }
         }
 
-        // Hash side to move
-        if (Board.side == MoveGenerator.White)
-            hashKey ^= sideKey;
+        if (side == White)
+            key ^= sideKey;
 
-        // Hash en passant square
-        if (Board.enPassant != (int)Square.noSquare)
-            hashKey ^= enpassantKeys[Board.enPassant];
+        if (enPassant != (int)Square.noSquare)
+            key ^= enpassantKeys[enPassant];
 
-        // Hash castling rights
-        hashKey ^= castleKeys[Board.castle];
+        key ^= castleKeys[castle];
 
-        return hashKey;
+        return key;
     }
 }

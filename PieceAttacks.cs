@@ -1,18 +1,82 @@
-using static BitboardOperations;
+using static System.Numerics.BitOperations;
 using static Board;
 using static MoveGenerator;
-using static System.Numerics.BitOperations;
+
+// =============================================================================
+//  Piece attack tables — precomputed at startup, read-only during search.
+//
+//  Leapers (pawns, knights, kings):
+//      Simple bit-shift masks. One 64-entry table per piece type per side.
+//
+//  Sliders (bishops, rooks, queens):
+//      Magic bitboards. For each square, a "mask" identifies the relevant
+//      blocker squares (edges excluded, since a piece on the edge can't block
+//      beyond the board). All 2^n subsets of those blockers are enumerated,
+//      multiplied by a pre-found "magic number", and shifted to produce a
+//      compact index into a per-square attack table.
+//
+//      Bishop: up to 9 relevant bits → 512 entries per square → 32 K entries.
+//      Rook:   up to 12 relevant bits → 4096 entries per square → 256 K entries.
+//      Queen = bishop | rook (no separate table needed).
+//
+//  The "on-the-fly" attack generators are used only during table initialization
+//  to fill the magic tables. They are never called during search.
+// =============================================================================
 
 public static class PieceAttacks
 {
-    public const ulong NotAFile = 18374403900871474942UL;
-    public const ulong NotHFile = 9187201950435737471UL;
-    public const ulong NotHGFile = 4557430888798830399UL;
-    public const ulong NotABFile = 18229723555195321596UL;
+    // =========================================================================
+    //  SECTION 1 — File-mask constants
+    //
+    //  Used to prevent bit-shifts from wrapping around the board edges.
+    //  For example, a pawn on the a-file shifting left would land on the
+    //  h-file of the rank below without the NotAFile guard.
+    // =========================================================================
 
-    public static ulong[,] pawnAttacks = new ulong[2, 64];
-    public static ulong[] knightAttacks = new ulong[64];
-    public static ulong[] kingAttacks = new ulong[64];
+    // All squares except the a-file (bit 0 of each rank cleared).
+    public const ulong NotAFile = 0xFEFEFEFEFEFEFEFE;
+    // All squares except the h-file (bit 7 of each rank cleared).
+    public const ulong NotHFile = 0x7F7F7F7F7F7F7F7F;
+    // All squares except the g- and h-files.
+    public const ulong NotHGFile = 0x3F3F3F3F3F3F3F3F;
+    // All squares except the a- and b-files.
+    public const ulong NotABFile = 0xFCFCFCFCFCFCFCFC;
+
+    // =========================================================================
+    //  SECTION 2 — Attack table storage
+    //
+    //  Leaper tables are small and stay 2D/1D as appropriate. Slider tables
+    //  are flattened to 1D for the same reason as Zobrist.pieceKeys and
+    //  Evaluation.MgTable: shift+OR indexing is cheaper than the multiply
+    //  that C# 2D arrays emit.
+    // =========================================================================
+
+    // Pawn attacks: [side, square]. 2 × 64 = 128 entries.
+    public static readonly ulong[,] pawnAttacks = new ulong[2, 64];
+
+    // Knight and king attacks: [square]. 64 entries each.
+    public static readonly ulong[] knightAttacks = new ulong[64];
+    public static readonly ulong[] kingAttacks = new ulong[64];
+
+    // Slider blocker masks: the subset of squares that can block a slider
+    // on the given square (board edges excluded).
+    public static readonly ulong[] bishopMasks = new ulong[64];
+    public static readonly ulong[] rookMasks = new ulong[64];
+
+    // Magic attack tables, flattened:
+    //   bishopAttacks[(square << 9) | magicIndex]   — 64 × 512  = 32,768 entries
+    //   rookAttacks[(square << 12) | magicIndex]    — 64 × 4096 = 262,144 entries
+    public static readonly ulong[] bishopAttacks = new ulong[64 << 9];
+    public static readonly ulong[] rookAttacks = new ulong[64 << 12];
+
+    // =========================================================================
+    //  SECTION 3 — Magic bitboard data
+    //
+    //  `relevantBits` = number of blocker bits for each square (determines
+    //  the table size: 2^bits entries). `magicNumbers` = pre-found multipliers
+    //  that hash each blocker configuration into a unique index with no
+    //  collisions. These are standard values shared across many engines.
+    // =========================================================================
 
     public static readonly int[] bishopRelevantBits =
     [
@@ -78,255 +142,219 @@ public static class PieceAttacks
         0x28000010020204UL, 0x6000020202d0240UL, 0x8918844842082200UL, 0x4010011029020020UL
     ];
 
-    public static ulong SetOccupancy(int index, int bitsInMask, ulong attackMask)
+    // =========================================================================
+    //  SECTION 4 — Initialization
+    //
+    //  Runs once from the static constructor. The "on-the-fly" generators
+    //  below are helpers used only here to populate the magic tables.
+    // =========================================================================
+
+    static PieceAttacks()
     {
-        ulong occupancy = 0UL;
+        InitLeaperAttacks();
+        InitSliderAttacks(isBishop: true);
+        InitSliderAttacks(isBishop: false);
+    }
 
-        for (int count = 0; count < bitsInMask; count++)
+    // --- Leaper helpers (init-only) ---
+
+    private static ulong MaskPawnAttacks(int side, int sq)
+    {
+        ulong bb = 1UL << sq;
+        ulong attacks = 0;
+
+        if (side == White)
         {
-            int square = TrailingZeroCount(attackMask);
-
-            PopBit(ref attackMask, square);
-
-            if ((index & (1 << count)) != 0)
-
-                occupancy |= 1UL << square;
+            if (((bb >> 7) & NotAFile) != 0) attacks |= bb >> 7;
+            if (((bb >> 9) & NotHFile) != 0) attacks |= bb >> 9;
         }
+        else
+        {
+            if (((bb << 7) & NotHFile) != 0) attacks |= bb << 7;
+            if (((bb << 9) & NotAFile) != 0) attacks |= bb << 9;
+        }
+        return attacks;
+    }
 
+    private static ulong MaskKnightAttacks(int sq)
+    {
+        ulong bb = 1UL << sq;
+        ulong attacks = 0;
+
+        if ((bb >> 17 & NotHFile) != 0) attacks |= bb >> 17;
+        if ((bb >> 15 & NotAFile) != 0) attacks |= bb >> 15;
+        if ((bb >> 10 & NotHGFile) != 0) attacks |= bb >> 10;
+        if ((bb >> 6 & NotABFile) != 0) attacks |= bb >> 6;
+        if ((bb << 17 & NotAFile) != 0) attacks |= bb << 17;
+        if ((bb << 15 & NotHFile) != 0) attacks |= bb << 15;
+        if ((bb << 10 & NotABFile) != 0) attacks |= bb << 10;
+        if ((bb << 6 & NotHGFile) != 0) attacks |= bb << 6;
+
+        return attacks;
+    }
+
+    private static ulong MaskKingAttacks(int sq)
+    {
+        ulong bb = 1UL << sq;
+        ulong attacks = 0;
+
+        if ((bb >> 8) != 0) attacks |= bb >> 8;
+        if (((bb >> 9) & NotHFile) != 0) attacks |= bb >> 9;
+        if (((bb >> 7) & NotAFile) != 0) attacks |= bb >> 7;
+        if (((bb >> 1) & NotHFile) != 0) attacks |= bb >> 1;
+        if ((bb << 8) != 0) attacks |= bb << 8;
+        if (((bb << 9) & NotAFile) != 0) attacks |= bb << 9;
+        if (((bb << 7) & NotHFile) != 0) attacks |= bb << 7;
+        if (((bb << 1) & NotAFile) != 0) attacks |= bb << 1;
+
+        return attacks;
+    }
+
+    private static void InitLeaperAttacks()
+    {
+        for (int sq = 0; sq < 64; sq++)
+        {
+            pawnAttacks[White, sq] = MaskPawnAttacks(White, sq);
+            pawnAttacks[Black, sq] = MaskPawnAttacks(Black, sq);
+            knightAttacks[sq] = MaskKnightAttacks(sq);
+            kingAttacks[sq] = MaskKingAttacks(sq);
+        }
+    }
+
+    // --- Slider helpers (init-only) ---
+
+    // Build the blocker mask for a bishop on `sq`. Edge squares are excluded
+    // because a blocker on the edge can't block anything beyond the board.
+    private static ulong MaskBishopAttacks(int sq)
+    {
+        ulong attacks = 0;
+        int tr = sq >> 3, tf = sq & 7;
+
+        for (int r = tr + 1, f = tf + 1; r <= 6 && f <= 6; r++, f++) attacks |= 1UL << (r * 8 + f);
+        for (int r = tr - 1, f = tf + 1; r >= 1 && f <= 6; r--, f++) attacks |= 1UL << (r * 8 + f);
+        for (int r = tr + 1, f = tf - 1; r <= 6 && f >= 1; r++, f--) attacks |= 1UL << (r * 8 + f);
+        for (int r = tr - 1, f = tf - 1; r >= 1 && f >= 1; r--, f--) attacks |= 1UL << (r * 8 + f);
+
+        return attacks;
+    }
+
+    // Build the blocker mask for a rook on `sq`. Same edge-exclusion logic.
+    private static ulong MaskRookAttacks(int sq)
+    {
+        ulong attacks = 0;
+        int tr = sq >> 3, tf = sq & 7;
+
+        for (int r = tr + 1; r <= 6; r++) attacks |= 1UL << (r * 8 + tf);
+        for (int r = tr - 1; r >= 1; r--) attacks |= 1UL << (r * 8 + tf);
+        for (int f = tf + 1; f <= 6; f++) attacks |= 1UL << (tr * 8 + f);
+        for (int f = tf - 1; f >= 1; f--) attacks |= 1UL << (tr * 8 + f);
+
+        return attacks;
+    }
+
+    // Given a bitmask of relevant squares and an index 0..2^n-1, set the
+    // bits of `occupancy` to match the binary representation of `index`.
+    // This enumerates all possible blocker configurations for a slider.
+    private static ulong SetOccupancy(int index, int bitsInMask, ulong attackMask)
+    {
+        ulong occupancy = 0;
+        for (int i = 0; i < bitsInMask; i++)
+        {
+            int sq = TrailingZeroCount(attackMask);
+            attackMask &= attackMask - 1;
+            if ((index & (1 << i)) != 0)
+                occupancy |= 1UL << sq;
+        }
         return occupancy;
     }
 
-    public static ulong MaskPawnAttacks(int side, int square)
+    // Compute exact bishop attacks for a given blocker configuration by
+    // ray-casting in all four diagonal directions. Init-only.
+    private static ulong BishopAttacksOnTheFly(int sq, ulong block)
     {
-        ulong attacks = 0UL;
-        ulong bitboard = 1UL << square;
-
-        if (side == 0) // White
-        {
-            if (((bitboard >> 7) & NotAFile) != 0) attacks |= bitboard >> 7;
-            if (((bitboard >> 9) & NotHFile) != 0) attacks |= bitboard >> 9;
-        }
-        else // Black
-        {
-            if (((bitboard << 7) & NotHFile) != 0) attacks |= bitboard << 7;
-            if (((bitboard << 9) & NotAFile) != 0) attacks |= bitboard << 9;
-        }
-        return attacks;
-    }
-
-    public static ulong MaskKnightAttacks(int square)
-    {
-        ulong attacks = 0UL;
-        ulong bitboard = 1UL << square;
-
-        if ((bitboard >> 17 & NotHFile) != 0) attacks |= bitboard >> 17;
-        if ((bitboard >> 15 & NotAFile) != 0) attacks |= bitboard >> 15;
-        if ((bitboard >> 10 & NotHGFile) != 0) attacks |= bitboard >> 10;
-        if ((bitboard >> 6 & NotABFile) != 0) attacks |= bitboard >> 6;
-        if ((bitboard << 17 & NotAFile) != 0) attacks |= bitboard << 17;
-        if ((bitboard << 15 & NotHFile) != 0) attacks |= bitboard << 15;
-        if ((bitboard << 10 & NotABFile) != 0) attacks |= bitboard << 10;
-        if ((bitboard << 6 & NotHGFile) != 0) attacks |= bitboard << 6;
-
-        return attacks;
-    }
-
-    public static ulong MaskKingAttacks(int square)
-    {
-        ulong attacks = 0UL;
-        ulong bitboard = 0UL;
-
-        SetBit(ref bitboard, square);
-
-        if ((bitboard >> 8) != 0) attacks |= bitboard >> 8;
-        if (((bitboard >> 9) & NotHFile) != 0) attacks |= bitboard >> 9;
-        if (((bitboard >> 7) & NotAFile) != 0) attacks |= bitboard >> 7;
-        if (((bitboard >> 1) & NotHFile) != 0) attacks |= bitboard >> 1;
-
-        if ((bitboard << 8) != 0) attacks |= bitboard << 8;
-        if (((bitboard << 9) & NotAFile) != 0) attacks |= bitboard << 9;
-        if (((bitboard << 7) & NotHFile) != 0) attacks |= bitboard << 7;
-        if (((bitboard << 1) & NotAFile) != 0) attacks |= bitboard << 1;
-
-        return attacks;
-    }
-
-    public static ulong MaskBishopAttacks(int square)
-    {
-        ulong attacks = 0UL;
-
-        int r, f;
-
-        int tr = square / 8;
-        int tf = square % 8;
-
-        for (r = tr + 1, f = tf + 1; r <= 6 && f <= 6; r++, f++) attacks |= 1UL << (r * 8 + f);
-        for (r = tr - 1, f = tf + 1; r >= 1 && f <= 6; r--, f++) attacks |= 1UL << (r * 8 + f);
-        for (r = tr + 1, f = tf - 1; r <= 6 && f >= 1; r++, f--) attacks |= 1UL << (r * 8 + f);
-        for (r = tr - 1, f = tf - 1; r >= 1 && f >= 1; r--, f--) attacks |= 1UL << (r * 8 + f);
-
-        return attacks;
-    }
-
-    public static ulong MaskRookAttacks(int square)
-    {
-        ulong attacks = 0UL;
-
-        int r, f;
-
-        int tr = square / 8;
-        int tf = square % 8;
-
-        for (r = tr + 1; r <= 6; r++) attacks |= 1UL << (r * 8 + tf);
-        for (r = tr - 1; r >= 1; r--) attacks |= 1UL << (r * 8 + tf);
-        for (f = tf + 1; f <= 6; f++) attacks |= 1UL << (tr * 8 + f);
-        for (f = tf - 1; f >= 1; f--) attacks |= 1UL << (tr * 8 + f);
-
-        return attacks;
-    }
-
-    public static ulong BishopAttacksOnTheFly(int square, ulong block)
-    {
-        ulong attacks = 0UL;
-
-        int tr = square / 8;
-        int tf = square % 8;
+        ulong attacks = 0;
+        int tr = sq >> 3, tf = sq & 7;
 
         for (int r = tr + 1, f = tf + 1; r <= 7 && f <= 7; r++, f++)
-        {
-            ulong sq = 1UL << (r * 8 + f);
-            attacks |= sq;
-            if ((sq & block) != 0) break;
-        }
-
+        { ulong s = 1UL << (r * 8 + f); attacks |= s; if ((s & block) != 0) break; }
         for (int r = tr - 1, f = tf + 1; r >= 0 && f <= 7; r--, f++)
-        {
-            ulong sq = 1UL << (r * 8 + f);
-            attacks |= sq;
-            if ((sq & block) != 0) break;
-        }
-
+        { ulong s = 1UL << (r * 8 + f); attacks |= s; if ((s & block) != 0) break; }
         for (int r = tr + 1, f = tf - 1; r <= 7 && f >= 0; r++, f--)
-        {
-            ulong sq = 1UL << (r * 8 + f);
-            attacks |= sq;
-            if ((sq & block) != 0) break;
-        }
-
+        { ulong s = 1UL << (r * 8 + f); attacks |= s; if ((s & block) != 0) break; }
         for (int r = tr - 1, f = tf - 1; r >= 0 && f >= 0; r--, f--)
-        {
-            ulong sq = 1UL << (r * 8 + f);
-            attacks |= sq;
-            if ((sq & block) != 0) break;
-        }
+        { ulong s = 1UL << (r * 8 + f); attacks |= s; if ((s & block) != 0) break; }
 
         return attacks;
     }
 
-    public static ulong RookAttacksOnTheFly(int square, ulong block)
+    // Compute exact rook attacks for a given blocker configuration by
+    // ray-casting in all four orthogonal directions. Init-only.
+    private static ulong RookAttacksOnTheFly(int sq, ulong block)
     {
-        ulong attacks = 0UL;
-
-        int tr = square / 8;
-        int tf = square % 8;
+        ulong attacks = 0;
+        int tr = sq >> 3, tf = sq & 7;
 
         for (int r = tr + 1; r <= 7; r++)
-        {
-            ulong sq = 1UL << (r * 8 + tf);
-            attacks |= sq;
-            if ((sq & block) != 0) break;
-        }
-
+        { ulong s = 1UL << (r * 8 + tf); attacks |= s; if ((s & block) != 0) break; }
         for (int r = tr - 1; r >= 0; r--)
-        {
-            ulong sq = 1UL << (r * 8 + tf);
-            attacks |= sq;
-            if ((sq & block) != 0) break;
-        }
-
+        { ulong s = 1UL << (r * 8 + tf); attacks |= s; if ((s & block) != 0) break; }
         for (int f = tf + 1; f <= 7; f++)
-        {
-            ulong sq = 1UL << (tr * 8 + f);
-            attacks |= sq;
-            if ((sq & block) != 0) break;
-        }
-
+        { ulong s = 1UL << (tr * 8 + f); attacks |= s; if ((s & block) != 0) break; }
         for (int f = tf - 1; f >= 0; f--)
-        {
-            ulong sq = 1UL << (tr * 8 + f);
-            attacks |= sq;
-            if ((sq & block) != 0) break;
-        }
+        { ulong s = 1UL << (tr * 8 + f); attacks |= s; if ((s & block) != 0) break; }
 
         return attacks;
     }
 
-    public static void InitLeapersAttacks()
+    // Populate the magic attack table for bishops or rooks.
+    private static void InitSliderAttacks(bool isBishop)
     {
-        for (int square = 0; square < 64; square++)
+        for (int sq = 0; sq < 64; sq++)
         {
-            pawnAttacks[White, square] = MaskPawnAttacks(White, square);
-            pawnAttacks[Black, square] = MaskPawnAttacks(Black, square);
-
-            knightAttacks[square] = MaskKnightAttacks(square);
-
-            kingAttacks[square] = MaskKingAttacks(square);
-        }
-    }
-
-    public static ulong[] bishopMasks = new ulong[64];
-
-    public static ulong[] rookMasks = new ulong[64];
-
-    public static ulong[,] bishopAttacks = new ulong[64, 512];
-
-    public static ulong[,] rookAttacks = new ulong[64, 4096];
-
-    public static void InitSliderAttacks(bool bishop)
-    {
-        for (int square = 0; square < 64; square++)
-        {
-            if (bishop)
+            if (isBishop)
             {
-                bishopMasks[square] = MaskBishopAttacks(square);
+                bishopMasks[sq] = MaskBishopAttacks(sq);
+                int bits = bishopRelevantBits[sq];
+                int count = 1 << bits;
 
-                ulong attackMask = bishopMasks[square];
-                int relevantBits = bishopRelevantBits[square];
-                int occupancyIndices = 1 << relevantBits;
-
-                for (int index = 0; index < occupancyIndices; index++)
+                for (int i = 0; i < count; i++)
                 {
-                    ulong occupancy = SetOccupancy(index, relevantBits, attackMask);
-                    int magicIndex = (int)((occupancy * bishopMagicNumbers[square]) >> (64 - bishopRelevantBits[square]));
-                    bishopAttacks[square, magicIndex] = BishopAttacksOnTheFly(square, occupancy);
+                    ulong occ = SetOccupancy(i, bits, bishopMasks[sq]);
+                    int magicIdx = (int)((occ * bishopMagicNumbers[sq]) >> (64 - bits));
+                    bishopAttacks[(sq << 9) | magicIdx] = BishopAttacksOnTheFly(sq, occ);
                 }
             }
             else
             {
-                rookMasks[square] = MaskRookAttacks(square);
+                rookMasks[sq] = MaskRookAttacks(sq);
+                int bits = rookRelevantBits[sq];
+                int count = 1 << bits;
 
-                ulong attackMask = rookMasks[square];
-                int relevantBits = rookRelevantBits[square];
-                int occupancyIndices = 1 << relevantBits;
-
-                for (int index = 0; index < occupancyIndices; index++)
+                for (int i = 0; i < count; i++)
                 {
-                    ulong occupancy = SetOccupancy(index, relevantBits, attackMask);
-                    int magicIndex = (int)((occupancy * rookMagicNumbers[square]) >> (64 - rookRelevantBits[square]));
-                    rookAttacks[square, magicIndex] = RookAttacksOnTheFly(square, occupancy);
+                    ulong occ = SetOccupancy(i, bits, rookMasks[sq]);
+                    int magicIdx = (int)((occ * rookMagicNumbers[sq]) >> (64 - bits));
+                    rookAttacks[(sq << 12) | magicIdx] = RookAttacksOnTheFly(sq, occ);
                 }
             }
         }
     }
+
+    // =========================================================================
+    //  SECTION 5 — Hot-path attack lookups
+    //
+    //  These three functions are called millions of times per second during
+    //  search and evaluation. Each is a mask → multiply → shift → table read.
+    //  No branches, no loops. The magic numbers are verified to produce no
+    //  collisions, so no bounds check is needed on the index.
+    // =========================================================================
 
     public static ulong GetBishopAttacks(int square, ulong occupancy)
     {
         occupancy &= bishopMasks[square];
         occupancy *= bishopMagicNumbers[square];
         occupancy >>= 64 - bishopRelevantBits[square];
-        int index = (int)occupancy;
-        if (index >= 512) index = 511; // Safety check
-        return bishopAttacks[square, index];
+        return bishopAttacks[(square << 9) | (int)occupancy];
     }
 
     public static ulong GetRookAttacks(int square, ulong occupancy)
@@ -334,9 +362,7 @@ public static class PieceAttacks
         occupancy &= rookMasks[square];
         occupancy *= rookMagicNumbers[square];
         occupancy >>= 64 - rookRelevantBits[square];
-        int index = (int)occupancy;
-        if (index >= 4096) index = 4095; // Safety check
-        return rookAttacks[square, index];
+        return rookAttacks[(square << 12) | (int)occupancy];
     }
 
     public static ulong GetQueenAttacks(int square, ulong occupancy)
@@ -344,66 +370,50 @@ public static class PieceAttacks
         return GetBishopAttacks(square, occupancy) | GetRookAttacks(square, occupancy);
     }
 
-    static PieceAttacks()
-    {
-        /* In C#, a static constructor is guaranteed to be executed by the .NET runtime before any static members of the class are used  
-        for the first time. So, the moment the search algorithm calls Evaluation.Evaluate(), the runtime ensures that
-        InitializeTables() has already been run exactly once. */
-
-        // Initialize attack tables
-        InitLeapersAttacks();
-        InitSliderAttacks(true);
-        InitSliderAttacks(false);
-    }
+    // =========================================================================
+    //  SECTION 6 — Square attack testing
+    //
+    //  "Is `square` attacked by any piece of the given `side`?" Uses the
+    //  reverse-attack trick for pawns: to check if a White pawn attacks
+    //  `square`, we look up the Black pawn attack pattern from `square`
+    //  and AND it with White's pawn bitboard.
+    //
+    //  Early returns on the first hit — most squares are attacked by at
+    //  most one piece type, so the average case exits after 1–2 checks.
+    // =========================================================================
 
     public static bool IsSquareAttacked(int square, int side)
     {
-        if (side == White && (pawnAttacks[Black, square] & bitboards[P]) != 0)
-            return true;
+        // Piece-code offset: 0 for White (P..K = 0..5), 6 for Black (p..k = 6..11).
+        int offset = side == White ? 0 : 6;
+        ulong occ = occupancies[Both];
 
-        if (side == Black && (pawnAttacks[White, square] & bitboards[p]) != 0)
-            return true;
-
-        if ((knightAttacks[square] & (side == White ? bitboards[N] : bitboards[n])) != 0)
-            return true;
-
-        if ((GetBishopAttacks(square, occupancies[Both]) &
-            (side == White ? bitboards[B] : bitboards[b])) != 0)
-            return true;
-
-        if ((GetRookAttacks(square, occupancies[Both]) &
-            (side == White ? bitboards[R] : bitboards[r])) != 0)
-            return true;
-
-        if ((GetQueenAttacks(square, occupancies[Both]) &
-            (side == White ? bitboards[Q] : bitboards[q])) != 0)
-            return true;
-
-        if ((kingAttacks[square] & (side == White ? bitboards[K] : bitboards[k])) != 0)
-            return true;
+        if ((pawnAttacks[side ^ 1, square] & bitboards[P + offset]) != 0) return true;
+        if ((knightAttacks[square] & bitboards[N + offset]) != 0) return true;
+        if ((GetBishopAttacks(square, occ) & bitboards[B + offset]) != 0) return true;
+        if ((GetRookAttacks(square, occ) & bitboards[R + offset]) != 0) return true;
+        if ((GetQueenAttacks(square, occ) & bitboards[Q + offset]) != 0) return true;
+        if ((kingAttacks[square] & bitboards[K + offset]) != 0) return true;
 
         return false;
     }
 
+    // =========================================================================
+    //  SECTION 7 — Debug helpers
+    // =========================================================================
+
     public static void PrintAttackedSquares(int side)
     {
         Console.WriteLine();
-
         for (int rank = 0; rank < 8; rank++)
         {
             for (int file = 0; file < 8; file++)
             {
-                int square = rank * 8 + file;
-
-                if (file == 0)
-                    Console.Write($"  {8 - rank} ");
-
-                Console.Write($" {IsSquareAttacked(square, side)}");
+                if (file == 0) Console.Write($"  {8 - rank} ");
+                Console.Write($" {IsSquareAttacked(rank * 8 + file, side)}");
             }
-
             Console.WriteLine();
         }
-
         Console.WriteLine("\n     a b c d e f g h\n");
     }
 }
