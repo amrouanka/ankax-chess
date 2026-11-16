@@ -13,9 +13,8 @@ using static MoveGenerator;
 //  out the old keys and XORing in the new ones — no full rebuild needed.
 //
 //  The random keys are generated once at startup with a xorshift32 PRNG seeded
-//  with the conventional value 1804289383 (same seed used by Stockfish and
-//  most Code-Monkey-King–lineage engines, so positions are cross-comparable
-//  during debugging).
+//  with the conventional value 1804289383 (same seed used by Stockfish
+//  so positions are cross-comparable during debugging).
 // =============================================================================
 
 public static class Zobrist
