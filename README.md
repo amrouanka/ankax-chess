@@ -17,6 +17,7 @@ with all major chess GUIs.
 - **v1.0.4:** +7 Elo over v1.0.3 (self-play, history heuristic improvements)
 - **v1.0.5:** +7 Elo over v1.0.4 (self-play, fail-soft search & IIR)
 - **v1.0.6:** +65 to +93 Elo over v1.0.5 (self-play, time management overhaul; TC-dependent)
+- **v1.0.7:** +12 Elo over v1.0.6 (self-play, Counter-move history)
 
 > Self-play results measured at 3+0.05 using
 > [cutechess-cli](https://github.com/cutechess/cutechess) with the
