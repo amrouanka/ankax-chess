@@ -1,4 +1,4 @@
-using System;
+using static System.Numerics.BitOperations;
 
 public static class Zobrist
 {
@@ -107,7 +107,7 @@ public static class Zobrist
 
             while (bitboard != 0)
             {
-                int square = BitboardOperations.GetLs1bIndex(bitboard);
+                int square = TrailingZeroCount(bitboard);
                 hashKey ^= pieceKeys[piece, square];
                 BitboardOperations.PopBit(ref bitboard, square);
             }

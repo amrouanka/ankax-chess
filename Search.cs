@@ -3,6 +3,7 @@ using System.Text;
 using static Board;
 using static MoveEncoding;
 using static MoveGenerator;
+using static System.Numerics.BitOperations;
 
 // =============================================================================
 //  AnkaX Search — Principal Variation Search with PVS, NMP, LMR, and pruning
@@ -1077,8 +1078,8 @@ public static class Search
         int sideToMove = side;
 
         int kSq = sideToMove == White
-            ? BitboardOperations.GetLs1bIndex(bitboards[K])
-            : BitboardOperations.GetLs1bIndex(bitboards[k]);
+            ? TrailingZeroCount(bitboards[K])
+            : TrailingZeroCount(bitboards[k]);
 
         return PieceAttacks.IsSquareAttacked(kSq, sideToMove ^ 1);
     }

@@ -4,6 +4,7 @@ using static MoveEncoding;
 using static PieceAttacks;
 using static Square;
 using static BitboardOperations;
+using static System.Numerics.BitOperations;
 
 public static class MoveGenerator
 {
@@ -84,7 +85,7 @@ public static class MoveGenerator
         ulong pawns = bitboards[pawnPiece];
         while (pawns != 0)
         {
-            int src = GetLs1bIndex(pawns);
+            int src = TrailingZeroCount(pawns);
 
             // --- Pushes (skipped in captures-only mode) ---
             if (!capturesOnly)
@@ -118,7 +119,7 @@ public static class MoveGenerator
             ulong attacks = pawnAttacks[side, src] & enemyOcc;
             while (attacks != 0)
             {
-                int target = GetLs1bIndex(attacks);
+                int target = TrailingZeroCount(attacks);
 
                 if (src >= promoFirst && src <= promoLast)
                 {
@@ -153,12 +154,12 @@ public static class MoveGenerator
         ulong knights = bitboards[knightPiece];
         while (knights != 0)
         {
-            int src = GetLs1bIndex(knights);
+            int src = TrailingZeroCount(knights);
             ulong attacks = knightAttacks[src] & targetMask;
 
             while (attacks != 0)
             {
-                int target = GetLs1bIndex(attacks);
+                int target = TrailingZeroCount(attacks);
                 int cap = GetBit(enemyOcc, target) ? 1 : 0;
                 AddMove(ref moveList, EncodeMove(src, target, knightPiece, 0, cap, 0, 0, 0));
                 PopBit(ref attacks, target);
@@ -174,12 +175,12 @@ public static class MoveGenerator
         ulong bishops = bitboards[bishopPiece];
         while (bishops != 0)
         {
-            int src = GetLs1bIndex(bishops);
+            int src = TrailingZeroCount(bishops);
             ulong attacks = GetBishopAttacks(src, bothOcc) & targetMask;
 
             while (attacks != 0)
             {
-                int target = GetLs1bIndex(attacks);
+                int target = TrailingZeroCount(attacks);
                 int cap = GetBit(enemyOcc, target) ? 1 : 0;
                 AddMove(ref moveList, EncodeMove(src, target, bishopPiece, 0, cap, 0, 0, 0));
                 PopBit(ref attacks, target);
@@ -195,12 +196,12 @@ public static class MoveGenerator
         ulong rooks = bitboards[rookPiece];
         while (rooks != 0)
         {
-            int src = GetLs1bIndex(rooks);
+            int src = TrailingZeroCount(rooks);
             ulong attacks = GetRookAttacks(src, bothOcc) & targetMask;
 
             while (attacks != 0)
             {
-                int target = GetLs1bIndex(attacks);
+                int target = TrailingZeroCount(attacks);
                 int cap = GetBit(enemyOcc, target) ? 1 : 0;
                 AddMove(ref moveList, EncodeMove(src, target, rookPiece, 0, cap, 0, 0, 0));
                 PopBit(ref attacks, target);
@@ -216,12 +217,12 @@ public static class MoveGenerator
         ulong queens = bitboards[queenPiece];
         while (queens != 0)
         {
-            int src = GetLs1bIndex(queens);
+            int src = TrailingZeroCount(queens);
             ulong attacks = GetQueenAttacks(src, bothOcc) & targetMask;
 
             while (attacks != 0)
             {
-                int target = GetLs1bIndex(attacks);
+                int target = TrailingZeroCount(attacks);
                 int cap = GetBit(enemyOcc, target) ? 1 : 0;
                 AddMove(ref moveList, EncodeMove(src, target, queenPiece, 0, cap, 0, 0, 0));
                 PopBit(ref attacks, target);
@@ -237,12 +238,12 @@ public static class MoveGenerator
         ulong kings = bitboards[kingPiece];
         while (kings != 0)
         {
-            int src = GetLs1bIndex(kings);
+            int src = TrailingZeroCount(kings);
             ulong attacks = kingAttacks[src] & targetMask;
 
             while (attacks != 0)
             {
-                int target = GetLs1bIndex(attacks);
+                int target = TrailingZeroCount(attacks);
                 int cap = GetBit(enemyOcc, target) ? 1 : 0;
                 AddMove(ref moveList, EncodeMove(src, target, kingPiece, 0, cap, 0, 0, 0));
                 PopBit(ref attacks, target);
@@ -472,8 +473,8 @@ public static class MoveGenerator
             Zobrist.hashKey ^= Zobrist.sideKey;
 
             int kingSquare = isWhite
-                ? GetLs1bIndex(bitboards[K])
-                : GetLs1bIndex(bitboards[k]);
+                ? TrailingZeroCount(bitboards[K])
+                : TrailingZeroCount(bitboards[k]);
 
             if (IsSquareAttacked(kingSquare, side))
                 return 0;

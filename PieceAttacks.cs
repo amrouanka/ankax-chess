@@ -1,6 +1,7 @@
 using static BitboardOperations;
 using static Board;
 using static MoveGenerator;
+using static System.Numerics.BitOperations;
 
 public static class PieceAttacks
 {
@@ -83,7 +84,7 @@ public static class PieceAttacks
 
         for (int count = 0; count < bitsInMask; count++)
         {
-            int square = GetLs1bIndex(attackMask);
+            int square = TrailingZeroCount(attackMask);
 
             PopBit(ref attackMask, square);
 
