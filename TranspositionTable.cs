@@ -131,13 +131,7 @@ public static class TranspositionTable
         if (score > 48000) score += ply;
         else if (score < -48000) score -= ply;
 
-        // Only replace if the slot is empty, holds a different position,
-        // or the new search is at least as deep as the stored one.
-        ref TTEntry entry = ref table[index];
-        if (entry.hashKey == hashkey && depth < entry.depth)
-            return;
-
-        entry = new TTEntry
+        table[index] = new TTEntry
         {
             hashKey = hashkey,
             depth = depth,
