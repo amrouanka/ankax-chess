@@ -10,8 +10,4 @@ public enum Square
     a1, b1, c1, d1, e1, f1, g1, h1, noSquare
 }
 
-public enum Piece { P, N, B, R, Q, K, p, n, b, r, q, k };
-
-public enum CastlingRights { wk = 1, wq = 2, bk = 4, bq = 8 };
-
-public enum MoveFlag { allMoves, capturesOnly }
+public enum CastlingRights { wk = 1, wq = 2, bk = 4, bq = 8 }

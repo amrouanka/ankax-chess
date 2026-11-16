@@ -30,20 +30,18 @@ public static class MoveEncoding
     }
 
     public static int GetMoveSource(int move) => move & 0x3F;
-    public static int GetMoveTarget(int move) => (move & 0xFC0) >> 6;
-    public static int GetMovePiece(int move) => (move & 0xF000) >> 12;
-    public static int GetMovePromoted(int move) => (move & 0xF0000) >> 16;
+    public static int GetMoveTarget(int move) => (move >> 6) & 0x3F;
+    public static int GetMovePiece(int move) => (move >> 12) & 0xF;
+    public static int GetMovePromoted(int move) => (move >> 16) & 0xF;
     public static int GetMoveCapture(int move) => move & 0x100000;
     public static int GetMoveDouble(int move) => move & 0x200000;
     public static int GetMoveEnpassant(int move) => move & 0x400000;
     public static int GetMoveCastling(int move) => move & 0x800000;
 
-    public static string GetMove(int move)
-    {
-        return $"{squareToCoordinates[GetMoveSource(move)]}" +
-               $"{squareToCoordinates[GetMoveTarget(move)]}" +
-               $"{promotedPieces[GetMovePromoted(move)]}";
-    }
+    public static string GetMove(int move) =>
+        $"{squareToCoordinates[GetMoveSource(move)]}" +
+        $"{squareToCoordinates[GetMoveTarget(move)]}" +
+        $"{promotedPieces[GetMovePromoted(move)]}";
 
     public static void PrintMove(int move) => Console.WriteLine(GetMove(move));
 }

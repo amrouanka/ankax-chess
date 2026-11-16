@@ -272,7 +272,7 @@ public static class Uci
                     break;
 
                 Search.AddToRepetitionHistory(Zobrist.hashKey);
-                MakeMove(move, (int)MoveFlag.allMoves);
+                MakeMove(move);
                 idx++;
             }
         }

@@ -310,10 +310,6 @@ public static class MoveGenerator
         }
     }
 
-    // Captures-only wrapper for quiescence search.
-    public static void GenerateCaptureMoves(ref MoveList moveList) =>
-        GenerateMoves(ref moveList, capturesOnly: true);
-
     // =========================================================================
     //  SECTION 3 — Move list helper
     // =========================================================================
@@ -343,12 +339,8 @@ public static class MoveGenerator
     //  loop but requires a wider move format — a future optimization.
     // =========================================================================
 
-    public static int MakeMove(int move, int moveFlag)
+    public static int MakeMove(int move)
     {
-        // Captures-only mode: reject quiet moves without touching the board.
-        if (moveFlag != (int)MoveFlag.allMoves && GetMoveCapture(move) == 0)
-            return 0;
-
         bool isWhite = side == White;
 
         // Clear the old en-passant key from the hash (if any). The new EP

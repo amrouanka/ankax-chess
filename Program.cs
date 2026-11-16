@@ -1,15 +1,15 @@
-﻿using static MoveFlag;
-using static MoveGenerator;
+﻿using static MoveGenerator;
 
 /// <summary>
 /// Entry point. By default runs the UCI loop. Command-line arguments can
-/// trigger perft tests or other developer utilities.
+/// trigger perft tests or a fixed-depth benchmark.
 ///
 /// Usage:
 ///   AnkaX.exe                 → UCI mode (default)
 ///   AnkaX.exe perft N         → run perft to depth N on starting position
 ///   AnkaX.exe perft N "FEN"   → run perft to depth N on a given FEN
 ///   AnkaX.exe perft suite     → run the built-in perft test suite
+///   AnkaX.exe bench [depth]   → fixed-depth benchmark (default 12)
 /// </summary>
 internal static class Program
 {
@@ -25,8 +25,8 @@ internal static class Program
     public const string Position6 = "r4rk1/1pp1qppp/p1np1n2/2b1p1B1/2B1P1b1/P1NP1N2/1PP1QPPP/R4RK1 w - - 0 10";
 
     /// <summary>
-    /// Global debug flag. When true, Search may suppress UCI output and instead
-    /// expose results via static fields for test harnesses. Off in production.
+    /// When true, Search suppresses UCI output and exposes results via static
+    /// fields for test harnesses. Off in production.
     /// </summary>
     public static bool Debug = false;
 
@@ -43,12 +43,13 @@ internal static class Program
                 Uci.UciLoop();
                 return 0;
             }
-            return args[0].ToLowerInvariant() switch
-            {
-                "perft" => HandlePerftCommand(args),
-                "bench" => HandleBenchCommand(args),
-                _ => PrintUsageAndExit()
-            };
+
+            if (string.Equals(args[0], "perft", StringComparison.OrdinalIgnoreCase))
+                return HandlePerftCommand(args);
+            if (string.Equals(args[0], "bench", StringComparison.OrdinalIgnoreCase))
+                return HandleBenchCommand(args);
+
+            return PrintUsageAndExit();
         }
         catch (Exception ex)
         {
@@ -77,14 +78,12 @@ internal static class Program
 
     private static int HandlePerftCommand(string[] args)
     {
-        // "perft suite"
-        if (args.Length >= 2 && args[1].Equals("suite", StringComparison.OrdinalIgnoreCase))
+        if (args.Length >= 2 && string.Equals(args[1], "suite", StringComparison.OrdinalIgnoreCase))
         {
             RunPerftSuite();
             return 0;
         }
 
-        // "perft <depth> [fen]"
         if (args.Length < 2 || !int.TryParse(args[1], out int depth) || depth < 1)
         {
             Console.WriteLine("Error: perft requires a depth >= 1, or the keyword 'suite'.");
@@ -92,55 +91,47 @@ internal static class Program
         }
 
         string fen = args.Length >= 3 ? args[2] : StartPosition;
-
         Board.ParseFEN(fen);
         RunPerft(depth);
         return 0;
     }
 
     // =========================================================================
-    //  Benchmark Command
+    //  Benchmark
     //
-    //  Standard fixed-depth benchmark used to measure search speed and detect
-    //  regressions. Searches a diverse set of positions to a fixed depth with
-    //  the TT cleared between each position for reproducibility.
-    //
-    //  Usage:
-    //    AnkaX bench          → default depth 12
-    //    AnkaX bench 14       → custom depth
-    //
-    //  Output format matches the convention used by Stockfish, Ethereal, and
-    //  OpenBench so results can be compared across engines and versions.
+    //  Fixed-depth benchmark for measuring search speed and detecting
+    //  regressions. TT is cleared between positions for reproducibility.
+    //  Output format matches Stockfish/Ethereal/OpenBench conventions.
     // =========================================================================
 
     private static readonly string[] BenchPositions =
     [
         // Opening
         "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
-    "rnbqkbnr/pppppppp/8/8/2P5/8/PP1PPPPP/RNBQKBNR b KQkq - 0 1",
-    "r1bqkbnr/pppp1ppp/2n5/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R b KQkq - 3 3",
-    "r1bqkbnr/1ppp1ppp/p1n5/1B2p3/4P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 0 4",
+        "rnbqkbnr/pppppppp/8/8/2P5/8/PP1PPPPP/RNBQKBNR b KQkq - 0 1",
+        "r1bqkbnr/pppp1ppp/2n5/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R b KQkq - 3 3",
+        "r1bqkbnr/1ppp1ppp/p1n5/1B2p3/4P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 0 4",
 
-    // Middlegame — open / tactical
-    "rnbqkb1r/1p2pppp/p2p1n2/8/3NP3/2N5/PPP2PPP/R1BQKB1R w KQkq - 0 6",
-    "r1bqkb1r/pppp1ppp/2n2n2/4p2Q/2B1P3/8/PPPP1PPP/RNB1K1NR w KQkq - 4 4",
-    "r1bq1rk1/pp2ppbp/2np1np1/8/3NP3/2N1BP2/PPPQ2PP/R3KB1R w KQ - 0 9",
+        // Middlegame — open / tactical
+        "rnbqkb1r/1p2pppp/p2p1n2/8/3NP3/2N5/PPP2PPP/R1BQKB1R w KQkq - 0 6",
+        "r1bqkb1r/pppp1ppp/2n2n2/4p2Q/2B1P3/8/PPPP1PPP/RNB1K1NR w KQkq - 4 4",
+        "r1bq1rk1/pp2ppbp/2np1np1/8/3NP3/2N1BP2/PPPQ2PP/R3KB1R w KQ - 0 9",
 
-    // Middlegame — closed / positional
-    "rnbq1rk1/ppp1ppbp/3p1np1/8/2PPP3/2N2N2/PP3PPP/R1BQKB1R w KQ - 0 7",
-    "rnbqkb1r/ppp1pppp/5n2/3p4/2PP4/2N5/PP2PPPP/R1BQKBNR w KQkq - 2 3",
-    "rnbqk1nr/pppp1ppp/4p3/8/1bPP4/2N5/PP2PPPP/R1BQKBNR w KQkq - 2 3",
+        // Middlegame — closed / positional
+        "rnbq1rk1/ppp1ppbp/3p1np1/8/2PPP3/2N2N2/PP3PPP/R1BQKB1R w KQ - 0 7",
+        "rnbqkb1r/ppp1pppp/5n2/3p4/2PP4/2N5/PP2PPPP/R1BQKBNR w KQkq - 2 3",
+        "rnbqk1nr/pppp1ppp/4p3/8/1bPP4/2N5/PP2PPPP/R1BQKBNR w KQkq - 2 3",
 
-    // Complex / sharp
-    "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1",
-    "r3k2r/Pppp1ppp/1b3nbN/nP6/BBP1P3/q4N2/Pp1P2PP/R2Q1RK1 w kq - 0 1",
-    "r4rk1/1pp1qppp/p1np1n2/2b1p1B1/2B1P1b1/P1NP1N2/1PP1QPPP/R4RK1 w - - 0 10",
+        // Complex / sharp
+        "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1",
+        "r3k2r/Pppp1ppp/1b3nbN/nP6/BBP1P3/q4N2/Pp1P2PP/R2Q1RK1 w kq - 0 1",
+        "r4rk1/1pp1qppp/p1np1n2/2b1p1B1/2B1P1b1/P1NP1N2/1PP1QPPP/R4RK1 w - - 0 10",
 
-    // Endgame
-    "8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1",
-    "8/8/4k3/8/4P3/4K3/8/4R3 w - - 0 1",
-    "8/5pk1/6p1/3P4/8/6K1/5P2/8 w - - 0 1",
-];
+        // Endgame
+        "8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1",
+        "8/8/4k3/8/4P3/4K3/8/4R3 w - - 0 1",
+        "8/5pk1/6p1/3P4/8/6K1/5P2/8 w - - 0 1",
+    ];
 
     private static int HandleBenchCommand(string[] args)
     {
@@ -148,8 +139,6 @@ internal static class Program
         if (args.Length >= 2 && int.TryParse(args[1], out int d) && d > 0)
             depth = d;
 
-        // Suppress UCI output during bench. SearchPosition checks Program.Debug
-        // and skips info/bestmove printing when it's true.
         bool prevDebug = Debug;
         Debug = true;
 
@@ -163,14 +152,8 @@ internal static class Program
         {
             Board.ParseFEN(BenchPositions[i]);
 
-            // Reset repetition history for the new position. The starting
-            // position hash must be in the table so threefold detection works
-            // correctly during the search.
             Search.repetitionIndex = 0;
             Search.AddToRepetitionHistory(Zobrist.hashKey);
-
-            // Clear TT so each position is searched from scratch. This makes
-            // results reproducible across runs and independent of position order.
             TranspositionTable.Clear();
 
             long start = GetTimeMs();
@@ -202,8 +185,8 @@ internal static class Program
     // =========================================================================
 
     /// <summary>
-    /// Recursive perft: counts leaf nodes reachable from the current position
-    /// at the given depth. Used to verify move generation correctness.
+    /// Recursive perft: counts leaf nodes at the given depth.
+    /// BoardState is passed by 'in' reference to avoid copying ~144 bytes per node.
     /// </summary>
     private static long PerftDriver(int depth)
     {
@@ -218,14 +201,14 @@ internal static class Program
         {
             BoardState state = Board.CopyBoard();
 
-            if (MakeMove(moveList.moves[i], (int)allMoves) == 0)
+            if (MakeMove(moveList.moves[i]) == 0)
             {
-                Board.TakeBack(state);
+                Board.TakeBack(in state);
                 continue;
             }
 
             nodes += PerftDriver(depth - 1);
-            Board.TakeBack(state);
+            Board.TakeBack(in state);
         }
 
         return nodes;
@@ -234,7 +217,6 @@ internal static class Program
     /// <summary>
     /// Runs perft and prints per-move node counts in the standard format
     /// used by Stockfish (`go perft N`), plus total nodes, time, and NPS.
-    /// Output can be diff'd directly against other engines to locate bugs.
     /// </summary>
     private static long RunPerft(int depth)
     {
@@ -252,15 +234,15 @@ internal static class Program
         {
             BoardState state = Board.CopyBoard();
 
-            if (MakeMove(moveList.moves[i], (int)allMoves) == 0)
+            if (MakeMove(moveList.moves[i]) == 0)
             {
-                Board.TakeBack(state);
+                Board.TakeBack(in state);
                 continue;
             }
 
             long nodesForMove = depth == 1 ? 1 : PerftDriver(depth - 1);
             totalNodes += nodesForMove;
-            Board.TakeBack(state);
+            Board.TakeBack(in state);
 
             Console.WriteLine($"     {MoveEncoding.GetMove(moveList.moves[i]),-6} : {nodesForMove}");
         }
@@ -283,29 +265,26 @@ internal static class Program
     // =========================================================================
 
     /// <summary>
-    /// One row of the perft suite: a FEN, a depth, and the expected node count.
-    /// Expected counts come from the Chess Programming Wiki perft results page.
+    /// One row of the perft suite. Expected counts from the Chess Programming Wiki.
     /// </summary>
     private readonly record struct PerftTest(string Fen, int Depth, long Expected, string Name);
 
     /// <summary>
-    /// The six classical perft positions. Between them they cover:
-    /// standard play, promotions, en passant, castling, pins, and discovered checks.
-    /// If MoveGenerator passes all six, it's almost certainly correct.
+    /// Six classical perft positions covering standard play, promotions,
+    /// en passant, castling, pins, and discovered checks.
     /// </summary>
     private static readonly PerftTest[] PerftSuite =
     [
-        new(StartPosition,    5, 4_865_609,    "Startpos"),
-        new(KiwipetePosition, 4, 4_085_603,    "Kiwipete"),
-        new(PinPosition,      6, 11_030_083,   "Pin position"),
-        new(Position4,        5, 15_833_292,   "Position 4"),
-        new(Position5,        3, 62_379,       "Position 5"),
-        new(Position6,        4, 3_894_594,    "Position 6"),
+        new(StartPosition,    5, 4_865_609,  "Startpos"),
+        new(KiwipetePosition, 4, 4_085_603,  "Kiwipete"),
+        new(PinPosition,      6, 11_030_083, "Pin position"),
+        new(Position4,        5, 15_833_292, "Position 4"),
+        new(Position5,        3, 62_379,     "Position 5"),
+        new(Position6,        4, 3_894_594,  "Position 6"),
     ];
 
     /// <summary>
-    /// Runs all perft tests silently (no per-move breakdown), then prints
-    /// a PASS/FAIL summary.
+    /// Runs all perft tests and prints a PASS/FAIL summary.
     /// </summary>
     private static void RunPerftSuite()
     {
@@ -321,7 +300,6 @@ internal static class Program
         for (int i = 0; i < PerftSuite.Length; i++)
         {
             var test = PerftSuite[i];
-
             Board.ParseFEN(test.Fen);
 
             long startTime = GetTimeMs();

@@ -121,7 +121,6 @@ public static class Search
 
     private const int TimeCheckMask = 16383;       // Check time every 16384 nodes
     private const int RepetitionTableSize = 1024;
-    private const int AllMoves = (int)MoveFlag.allMoves;
     private const int NoSquare = (int)Square.noSquare;
 
     #endregion
@@ -430,7 +429,7 @@ public static class Search
                 int move = moves[i];
                 BoardState state = CopyBoard();
 
-                if (MakeMove(move, AllMoves) == 0)
+                if (MakeMove(move) == 0)
                 {
                     TakeBack(state);
                     continue;
@@ -670,7 +669,7 @@ public static class Search
 
             // Make move and check legality
             BoardState state = CopyBoard();
-            if (MakeMove(move, AllMoves) == 0)
+            if (MakeMove(move) == 0)
             {
                 TakeBack(state);
                 continue;
@@ -858,7 +857,7 @@ public static class Search
         if (inCheck)
             GenerateMoves(ref moveList);
         else
-            GenerateCaptureMoves(ref moveList);
+            GenerateMoves(ref moveList, capturesOnly: true);
 
         int killerIndex = currentPly << KillerShift;
 
@@ -895,7 +894,7 @@ public static class Search
             }
 
             BoardState state = CopyBoard();
-            if (MakeMove(move, AllMoves) == 0)
+            if (MakeMove(move) == 0)
             {
                 TakeBack(state);
                 continue;
