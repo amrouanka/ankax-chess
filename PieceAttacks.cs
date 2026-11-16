@@ -397,23 +397,4 @@ public static class PieceAttacks
 
         return false;
     }
-
-    // =========================================================================
-    //  SECTION 7 — Debug helpers
-    // =========================================================================
-
-    public static void PrintAttackedSquares(int side)
-    {
-        Console.WriteLine();
-        for (int rank = 0; rank < 8; rank++)
-        {
-            for (int file = 0; file < 8; file++)
-            {
-                if (file == 0) Console.Write($"  {8 - rank} ");
-                Console.Write($" {IsSquareAttacked(rank * 8 + file, side)}");
-            }
-            Console.WriteLine();
-        }
-        Console.WriteLine("\n     a b c d e f g h\n");
-    }
 }
