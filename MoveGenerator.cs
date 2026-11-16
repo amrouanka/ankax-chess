@@ -346,12 +346,8 @@ public static class MoveGenerator
     public static int MakeMove(int move, int moveFlag)
     {
         // Captures-only mode: reject quiet moves without touching the board.
-        if (moveFlag != (int)MoveFlag.allMoves)
-        {
-            if (GetMoveCapture(move) == 0)
-                return 0;
-            return MakeMove(move, (int)MoveFlag.allMoves);
-        }
+        if (moveFlag != (int)MoveFlag.allMoves && GetMoveCapture(move) == 0)
+            return 0;
 
         bool isWhite = side == White;
 
@@ -373,7 +369,7 @@ public static class MoveGenerator
             halfmoveClock++;
 
         // --- Move the piece ---
-        PopBit(ref bitboards[piece], sourceSquare);
+        bitboards[piece] &= ~(1UL << sourceSquare);
         SetBit(ref bitboards[piece], targetSquare);
         Zobrist.hashKey ^= Zobrist.pieceKeys[(piece << 6) | sourceSquare];
         Zobrist.hashKey ^= Zobrist.pieceKeys[(piece << 6) | targetSquare];
@@ -388,7 +384,7 @@ public static class MoveGenerator
             {
                 if (GetBit(bitboards[bbPiece], targetSquare))
                 {
-                    PopBit(ref bitboards[bbPiece], targetSquare);
+                    bitboards[bbPiece] &= ~(1UL << targetSquare);
                     Zobrist.hashKey ^= Zobrist.pieceKeys[(bbPiece << 6) | targetSquare];
                     break;
                 }
@@ -400,7 +396,7 @@ public static class MoveGenerator
         if (promotedPiece != 0)
         {
             int pawnCode = isWhite ? P : p;
-            PopBit(ref bitboards[pawnCode], targetSquare);
+            bitboards[pawnCode] &= ~(1UL << targetSquare);
             Zobrist.hashKey ^= Zobrist.pieceKeys[(pawnCode << 6) | targetSquare];
 
             SetBit(ref bitboards[promotedPiece], targetSquare);
@@ -412,12 +408,12 @@ public static class MoveGenerator
         {
             if (isWhite)
             {
-                PopBit(ref bitboards[p], targetSquare + 8);
+                bitboards[p] &= ~(1UL << (targetSquare + 8));
                 Zobrist.hashKey ^= Zobrist.pieceKeys[(p << 6) | (targetSquare + 8)];
             }
             else
             {
-                PopBit(ref bitboards[P], targetSquare - 8);
+                bitboards[P] &= ~(1UL << (targetSquare - 8));
                 Zobrist.hashKey ^= Zobrist.pieceKeys[(P << 6) | (targetSquare - 8)];
             }
         }
@@ -436,22 +432,22 @@ public static class MoveGenerator
             switch ((Square)targetSquare)
             {
                 case g1:
-                    PopBit(ref bitboards[R], (int)h1); SetBit(ref bitboards[R], (int)f1);
+                    bitboards[R] ^= (1UL << (int)h1) | (1UL << (int)f1);
                     Zobrist.hashKey ^= Zobrist.pieceKeys[(R << 6) | (int)h1];
                     Zobrist.hashKey ^= Zobrist.pieceKeys[(R << 6) | (int)f1];
                     break;
                 case c1:
-                    PopBit(ref bitboards[R], (int)a1); SetBit(ref bitboards[R], (int)d1);
+                    bitboards[R] ^= (1UL << (int)a1) | (1UL << (int)d1);
                     Zobrist.hashKey ^= Zobrist.pieceKeys[(R << 6) | (int)a1];
                     Zobrist.hashKey ^= Zobrist.pieceKeys[(R << 6) | (int)d1];
                     break;
                 case g8:
-                    PopBit(ref bitboards[r], (int)h8); SetBit(ref bitboards[r], (int)f8);
+                    bitboards[r] ^= (1UL << (int)h8) | (1UL << (int)f8);
                     Zobrist.hashKey ^= Zobrist.pieceKeys[(r << 6) | (int)h8];
                     Zobrist.hashKey ^= Zobrist.pieceKeys[(r << 6) | (int)f8];
                     break;
                 case c8:
-                    PopBit(ref bitboards[r], (int)a8); SetBit(ref bitboards[r], (int)d8);
+                    bitboards[r] ^= (1UL << (int)a8) | (1UL << (int)d8);
                     Zobrist.hashKey ^= Zobrist.pieceKeys[(r << 6) | (int)a8];
                     Zobrist.hashKey ^= Zobrist.pieceKeys[(r << 6) | (int)d8];
                     break;
