@@ -114,10 +114,7 @@ public static class TranspositionTable
     //  Public API (indexing updated to use indexMask)
     // =========================================================================
 
-    public static void Clear()
-    {
-        Array.Clear(table, 0, table.Length);
-    }
+    public static void Clear() => Array.Clear(table, 0, table.Length);
 
     /// <summary>
     /// Stores a search result in the table using always-replace strategy.

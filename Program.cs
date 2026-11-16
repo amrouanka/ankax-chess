@@ -60,10 +60,11 @@ internal static class Program
     private static int PrintUsageAndExit()
     {
         Console.WriteLine("Usage:");
-        Console.WriteLine("  AnkaX                    Run UCI mode");
-        Console.WriteLine("  AnkaX perft <depth>      Run perft on starting position");
+        Console.WriteLine("  AnkaX                      Run UCI mode");
+        Console.WriteLine("  AnkaX perft <depth>        Run perft on starting position");
         Console.WriteLine("  AnkaX perft <depth> <fen>  Run perft on given FEN");
-        Console.WriteLine("  AnkaX perft suite        Run built-in perft test suite");
+        Console.WriteLine("  AnkaX perft suite          Run built-in perft test suite");
+        Console.WriteLine("  AnkaX bench [depth]        Run benchmark (default depth 12)");
         return 1;
     }
 
@@ -97,9 +98,102 @@ internal static class Program
         return 0;
     }
 
+    // =========================================================================
+    //  Benchmark Command
+    //
+    //  Standard fixed-depth benchmark used to measure search speed and detect
+    //  regressions. Searches a diverse set of positions to a fixed depth with
+    //  the TT cleared between each position for reproducibility.
+    //
+    //  Usage:
+    //    AnkaX bench          → default depth 12
+    //    AnkaX bench 14       → custom depth
+    //
+    //  Output format matches the convention used by Stockfish, Ethereal, and
+    //  OpenBench so results can be compared across engines and versions.
+    // =========================================================================
+
+    private static readonly string[] BenchPositions =
+    [
+        // Opening
+        "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+    "rnbqkbnr/pppppppp/8/8/2P5/8/PP1PPPPP/RNBQKBNR b KQkq - 0 1",
+    "r1bqkbnr/pppp1ppp/2n5/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R b KQkq - 3 3",
+    "r1bqkbnr/1ppp1ppp/p1n5/1B2p3/4P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 0 4",
+
+    // Middlegame — open / tactical
+    "rnbqkb1r/1p2pppp/p2p1n2/8/3NP3/2N5/PPP2PPP/R1BQKB1R w KQkq - 0 6",
+    "r1bqkb1r/pppp1ppp/2n2n2/4p2Q/2B1P3/8/PPPP1PPP/RNB1K1NR w KQkq - 4 4",
+    "r1bq1rk1/pp2ppbp/2np1np1/8/3NP3/2N1BP2/PPPQ2PP/R3KB1R w KQ - 0 9",
+
+    // Middlegame — closed / positional
+    "rnbq1rk1/ppp1ppbp/3p1np1/8/2PPP3/2N2N2/PP3PPP/R1BQKB1R w KQ - 0 7",
+    "rnbqkb1r/ppp1pppp/5n2/3p4/2PP4/2N5/PP2PPPP/R1BQKBNR w KQkq - 2 3",
+    "rnbqk1nr/pppp1ppp/4p3/8/1bPP4/2N5/PP2PPPP/R1BQKBNR w KQkq - 2 3",
+
+    // Complex / sharp
+    "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1",
+    "r3k2r/Pppp1ppp/1b3nbN/nP6/BBP1P3/q4N2/Pp1P2PP/R2Q1RK1 w kq - 0 1",
+    "r4rk1/1pp1qppp/p1np1n2/2b1p1B1/2B1P1b1/P1NP1N2/1PP1QPPP/R4RK1 w - - 0 10",
+
+    // Endgame
+    "8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1",
+    "8/8/4k3/8/4P3/4K3/8/4R3 w - - 0 1",
+    "8/5pk1/6p1/3P4/8/6K1/5P2/8 w - - 0 1",
+];
+
     private static int HandleBenchCommand(string[] args)
     {
-        Console.WriteLine("bench: not implemented yet.");
+        int depth = 12;
+        if (args.Length >= 2 && int.TryParse(args[1], out int d) && d > 0)
+            depth = d;
+
+        // Suppress UCI output during bench. SearchPosition checks Program.Debug
+        // and skips info/bestmove printing when it's true.
+        bool prevDebug = Debug;
+        Debug = true;
+
+        long totalNodes = 0;
+        long totalTime = 0;
+
+        Console.WriteLine($"Benchmark: depth {depth}, {BenchPositions.Length} positions");
+        Console.WriteLine();
+
+        for (int i = 0; i < BenchPositions.Length; i++)
+        {
+            Board.ParseFEN(BenchPositions[i]);
+
+            // Reset repetition history for the new position. The starting
+            // position hash must be in the table so threefold detection works
+            // correctly during the search.
+            Search.repetitionIndex = 0;
+            Search.AddToRepetitionHistory(Zobrist.hashKey);
+
+            // Clear TT so each position is searched from scratch. This makes
+            // results reproducible across runs and independent of position order.
+            TranspositionTable.Clear();
+
+            long start = GetTimeMs();
+            Search.SearchPosition(depth);
+            long elapsed = GetTimeMs() - start;
+
+            long nodes = Search.LastNodeCount;
+            totalNodes += nodes;
+            totalTime += elapsed;
+
+            Console.WriteLine($"  [{i + 1,2}/{BenchPositions.Length}]  " +
+                              $"{nodes,12:N0} nodes  {elapsed,6} ms");
+        }
+
+        long nps = totalTime > 0 ? totalNodes * 1000 / totalTime : 0;
+
+        Console.WriteLine();
+        Console.WriteLine($"  Total nodes: {totalNodes:N0}");
+        Console.WriteLine($"  Total time:  {totalTime:N0} ms");
+        Console.WriteLine($"  NPS:         {nps:N0}");
+        Console.WriteLine();
+
+        Debug = prevDebug;
         return 0;
     }
 
