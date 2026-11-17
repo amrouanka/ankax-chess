@@ -718,8 +718,8 @@ public static class Evaluation
         int bkSq = TrailingZeroCount(bK);
         mg += MgTable[(K << 6) | wkSq];
         eg += EgTable[(K << 6) | wkSq];
-        mg += MgTable[(k << 6) | bkSq];
-        eg += EgTable[(k << 6) | bkSq];
+        mg -= MgTable[(k << 6) | bkSq];
+        eg -= EgTable[(k << 6) | bkSq];
 
         // sign = -1 means "penalise White" (helper adds to mg; negative means
         // subtracting from White's score). Flipped for Black.

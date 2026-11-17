@@ -174,11 +174,11 @@ public static class TranspositionTable
                 return score;
 
             case TTFlag.Alpha:
-                if (score <= alpha) return alpha;
+                if (score <= alpha) return score;
                 break;
 
             case TTFlag.Beta:
-                if (score >= beta) return beta;
+                if (score >= beta) return score;
                 break;
         }
 
