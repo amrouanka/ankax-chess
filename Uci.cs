@@ -3,46 +3,26 @@ using static MoveEncoding;
 using static MoveGenerator;
 
 // =============================================================================
-//  AnkaX UCI Protocol Handler
-// =============================================================================
+// AnkaX Chess Engine - Universal Chess Interface (UCI) Protocol Handler
 //
-//  Implements the Universal Chess Interface (UCI) protocol.
-//  Reference: https://www.chessprogramming.org/UCI
+// Full implementation of the UCI protocol for communication with chess GUIs.
+// Supports position loading, move execution, time management initialization,
+// transposition table resizing, and debug visual displays.
 //
-//  Supported commands:
-//    uci          — Identify engine and report options
-//    isready      — Synchronization ping
-//    ucinewgame   — Reset for a new game (clears TT and board)
-//    position     — Set board position (startpos or FEN + moves)
-//    go           — Start searching (depth, movetime, clock, infinite)
-//    stop         — Abort current search
-//    quit         — Exit the engine
-//    setoption    — Set engine options (Hash)
-//    d            — Display current board (debug, non-standard)
-//
-//  Go sub-commands:
-//    depth <n>       — Search to fixed depth
-//    movetime <ms>   — Search for exactly N milliseconds
-//    wtime <ms>      — White's remaining clock time
-//    btime <ms>      — Black's remaining clock time
-//    winc <ms>       — White's increment per move
-//    binc <ms>       — Black's increment per move
-//    movestogo <n>   — Moves until next time control
-//    infinite        — Search until "stop" is received
-//
+// Protocol Reference: https://www.chessprogramming.org/UCI
 // =============================================================================
 
 public static class Uci
 {
     // =========================================================================
-    //  Constants
+    //  SECTION 1 — Engine Metadata & Configuration
     // =========================================================================
 
-    private const string EngineName = "AnkaX v1.0.8";
+    private const string EngineName = "AnkaX v1.1.0";
     private const string EngineAuthor = "Amrou Louai Anka";
+    private const int MaxSearchDepth = 64;
 
-    // Reusable move list for ParseMove (avoids heap allocation per call).
-    // Safe because UCI parsing is single-threaded and never overlaps with search.
+    // Reusable move list for move parsing (avoids allocation during input processing).
     private static MoveList parseMoveList;
 
     static Uci()
@@ -51,12 +31,10 @@ public static class Uci
     }
 
     // =========================================================================
-    //  Main UCI Loop
+    //  SECTION 2 — Main Control Loop
     // =========================================================================
 
-    /// <summary>
-    /// Reads commands from stdin and dispatches them. Runs until "quit".
-    /// </summary>
+    // Reads commands from standard input and dispatches to command handlers.
     public static void UciLoop()
     {
         while (true)
@@ -72,7 +50,7 @@ public static class Uci
             if (input.Length == 0)
                 continue;
 
-            // Fast first-character dispatch before full string comparison
+            // First-character dispatch switch for quick command routing
             switch (input[0])
             {
                 case 'u':
@@ -125,12 +103,10 @@ public static class Uci
     }
 
     // =========================================================================
-    //  Command Handlers
+    //  SECTION 3 — UCI Command Handlers
     // =========================================================================
 
-    /// <summary>
-    /// Responds to "uci" with engine identification and available options.
-    /// </summary>
+    // Responds to the initial "uci" command with engine identification and options.
     private static void HandleUci()
     {
         Console.WriteLine($"id name {EngineName}");
@@ -140,22 +116,16 @@ public static class Uci
         Console.WriteLine("uciok");
     }
 
-    /// <summary>
-    /// Responds to "ucinewgame" by resetting the board and clearing the TT.
-    /// </summary>
+    // Responds to "ucinewgame" by resetting board state and flushing the TT.
     private static void HandleUciNewGame()
     {
         ParsePosition("position startpos");
         TranspositionTable.Clear();
     }
 
-    /// <summary>
-    /// Responds to "setoption name X value Y".
-    /// Currently supports: Hash (stub — TT size is fixed at compile time).
-    /// </summary>
+    // Handles "setoption name Hash value <N>" to dynamically resize the TT.
     private static void HandleSetOption(string command)
     {
-        // Parse: "setoption name <name> value <value>"
         var parts = command.Split([' '], StringSplitOptions.RemoveEmptyEntries);
 
         string? name = null;
@@ -172,8 +142,6 @@ public static class Uci
         if (name == null)
             return;
 
-        // Hash option is accepted but currently ignored (TT size is compile-time constant).
-        // When dynamic TT sizing is added, this is where it goes.
         if (string.Equals(name, "Hash", StringComparison.OrdinalIgnoreCase) && value != null)
         {
             if (int.TryParse(value, out int hashMb))
@@ -181,9 +149,7 @@ public static class Uci
         }
     }
 
-    /// <summary>
-    /// Responds to "d" by printing the current board state (debug aid).
-    /// </summary>
+    // Responds to "d" command: displays ascii board representation and position info.
     private static void HandleDisplay()
     {
         Console.WriteLine();
@@ -212,13 +178,10 @@ public static class Uci
     }
 
     // =========================================================================
-    //  Position Parsing
+    //  SECTION 4 — Position & Search Command Parsers
     // =========================================================================
 
-    /// <summary>
-    /// Parses "position startpos [moves ...]" or "position fen FEN [moves ...]".
-    /// Sets up the board and plays the listed moves to reach the target position.
-    /// </summary>
+    // Parses "position [startpos | fen <FEN>] [moves <m1> <m2> ...]" command.
     public static void ParsePosition(string command)
     {
         if (string.IsNullOrEmpty(command))
@@ -230,7 +193,9 @@ public static class Uci
 
         int idx = 1;
 
-        // --- Set up the starting position ---
+        // ---------------------------------------------------------------------
+        //  Step 1: Set up base board state (startpos or custom FEN)
+        // ---------------------------------------------------------------------
         if (idx < parts.Length && parts[idx] == "startpos")
         {
             ParseFEN(Program.StartPosition);
@@ -239,8 +204,6 @@ public static class Uci
         else if (idx < parts.Length && parts[idx] == "fen")
         {
             idx++;
-
-            // Collect FEN tokens (up to 6 fields) until "moves" or end
             var fenTokens = new List<string>(6);
             while (idx < parts.Length && parts[idx] != "moves")
             {
@@ -258,10 +221,11 @@ public static class Uci
             ParseFEN(Program.StartPosition);
         }
 
-        // --- Reset repetition history ---
+        // ---------------------------------------------------------------------
+        //  Step 2: Reset repetition history and execute move sequence
+        // ---------------------------------------------------------------------
         Search.repetitionIndex = 0;
 
-        // --- Play the move sequence ---
         if (idx < parts.Length && parts[idx] == "moves")
         {
             idx++;
@@ -277,18 +241,10 @@ public static class Uci
             }
         }
 
-        // Record the final position for repetition detection
         Search.AddToRepetitionHistory(Zobrist.hashKey);
     }
 
-    // =========================================================================
-    //  Go Parsing
-    // =========================================================================
-
-    /// <summary>
-    /// Parses "go [depth N] [movetime N] [wtime N btime N ...] [infinite]"
-    /// and starts the search with the appropriate time control.
-    /// </summary>
+    // Parses "go [depth N] [movetime N] [wtime N btime N ...] [infinite]" command.
     public static void ParseGo(string command)
     {
         if (string.IsNullOrEmpty(command))
@@ -301,6 +257,9 @@ public static class Uci
 
         TimeManagement.ResetForGo();
 
+        // ---------------------------------------------------------------------
+        //  Step 1: Parse parameter tokens
+        // ---------------------------------------------------------------------
         for (int i = 1; i < parts.Length; i++)
         {
             switch (parts[i])
@@ -337,19 +296,19 @@ public static class Uci
                     int.TryParse(parts[++i], out TimeManagement.movestogo);
                     break;
 
-                // Skip tokens we don't use yet (ponder, searchmoves, nodes, mate)
                 case "ponder":
                 case "searchmoves":
                 case "nodes":
                 case "mate":
-                    // Consume the keyword; if it takes a value, skip that too
                     if (parts[i] != "ponder" && i + 1 < parts.Length)
                         i++;
                     break;
             }
         }
 
-        // --- Start the appropriate time control ---
+        // ---------------------------------------------------------------------
+        //  Step 2: Initialize time limits and trigger search thread
+        // ---------------------------------------------------------------------
         if (infinite)
         {
             TimeManagement.StartInfiniteSearch();
@@ -378,28 +337,21 @@ public static class Uci
         Search.SearchPosition(depth);
     }
 
-    private const int MaxSearchDepth = 64;
-
     // =========================================================================
-    //  Move Parsing
+    //  SECTION 5 — Move String Conversion
     // =========================================================================
 
-    /// <summary>
-    /// Converts a UCI move string (e.g., "e2e4", "a7a8q") to an encoded move.
-    /// Returns 0 if the string doesn't match any legal move in the current position.
-    /// </summary>
+    // Converts long algebraic notation (e.g. "e2e4", "a7a8q") to integer encoded move.
+    // Returns 0 if move string is invalid or illegal in current position.
     public static int ParseMove(string moveString)
     {
         if (string.IsNullOrEmpty(moveString) || moveString.Length < 4)
             return 0;
 
-        // Parse source and target squares from algebraic notation
-        // UCI: 'a'-'h' for file, '1'-'8' for rank
-        // Engine: a8=0, h1=63 → rank = 8 - digit, file = char - 'a'
+        // Algebraic notation mapping (a8=0 .. h1=63)
         int sourceSquare = (moveString[0] - 'a') + (8 - (moveString[1] - '0')) * 8;
         int targetSquare = (moveString[2] - 'a') + (8 - (moveString[3] - '0')) * 8;
 
-        // Generate all legal moves and find the matching one
         ref MoveList moveList = ref parseMoveList;
         GenerateMoves(ref moveList);
 
@@ -415,11 +367,11 @@ public static class Uci
 
             int promotedPiece = GetMovePromoted(move);
 
-            // Non-promotion: source and target match is sufficient
+            // Non-promotion move match
             if (promotedPiece == 0)
                 return move;
 
-            // Promotion: verify the promotion piece matches the 5th character
+            // Promotion move match against target character
             if (moveString.Length < 5)
                 continue;
 
@@ -440,7 +392,7 @@ public static class Uci
     }
 
     // =========================================================================
-    //  Display Helpers
+    //  SECTION 6 — Board Display & FEN Serialization
     // =========================================================================
 
     private static int GetPieceOnSquare(int square)
@@ -476,7 +428,6 @@ public static class Uci
 
     private static string GetFEN()
     {
-        // Minimal FEN reconstruction for debug display
         var fen = new System.Text.StringBuilder(90);
 
         for (int rank = 0; rank < 8; rank++)
@@ -501,7 +452,6 @@ public static class Uci
 
         fen.Append(side == White ? " w " : " b ");
 
-        // Castling rights
         bool anyCastle = false;
         if ((castle & (int)CastlingRights.wk) != 0) { fen.Append('K'); anyCastle = true; }
         if ((castle & (int)CastlingRights.wq) != 0) { fen.Append('Q'); anyCastle = true; }
@@ -509,7 +459,6 @@ public static class Uci
         if ((castle & (int)CastlingRights.bq) != 0) { fen.Append('q'); anyCastle = true; }
         if (!anyCastle) fen.Append('-');
 
-        // En passant
         if (enPassant != (int)Square.noSquare)
         {
             int epFile = enPassant % 8;

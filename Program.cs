@@ -1,20 +1,23 @@
 ﻿using static MoveGenerator;
 
-/// <summary>
-/// Entry point. By default runs the UCI loop. Command-line arguments can
-/// trigger perft tests or a fixed-depth benchmark.
-///
-/// Usage:
-///   AnkaX.exe                 → UCI mode (default)
-///   AnkaX.exe perft N         → run perft to depth N on starting position
-///   AnkaX.exe perft N "FEN"   → run perft to depth N on a given FEN
-///   AnkaX.exe perft suite     → run the built-in perft test suite
-///   AnkaX.exe bench [depth]   → fixed-depth benchmark (default 12)
-/// </summary>
+// =============================================================================
+// AnkaX Chess Engine - Program Entry Point & Testing Suite
+//
+// Command-line entry point supporting standard UCI mode, perft performance
+// verification, and fixed-depth search benchmarks.
+//
+// Commands:
+//   AnkaX.exe                 -> UCI mode (default)
+//   AnkaX.exe perft <N>       -> Run perft to depth N on startpos
+//   AnkaX.exe perft <N> <FEN> -> Run perft to depth N on custom FEN
+//   AnkaX.exe perft suite     -> Run full built-in perft test suite
+//   AnkaX.exe bench [depth]   -> Run fixed-depth benchmark suite (default depth 12)
+// =============================================================================
+
 internal static class Program
 {
     // =========================================================================
-    //  Well-known FEN positions
+    //  SECTION 1 — Known FEN Positions & Global Configuration
     // =========================================================================
 
     public const string StartPosition = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
@@ -24,14 +27,11 @@ internal static class Program
     public const string Position5 = "rnbq1k1r/pp1Pbppp/2p5/8/2B5/8/PPP1NnPP/RNBQK2R w KQ - 1 8";
     public const string Position6 = "r4rk1/1pp1qppp/p1np1n2/2b1p1B1/2B1P1b1/P1NP1N2/1PP1QPPP/R4RK1 w - - 0 10";
 
-    /// <summary>
-    /// When true, Search suppresses UCI output and exposes results via static
-    /// fields for test harnesses. Off in production.
-    /// </summary>
+    // Suppresses standard UCI output during benchmarks and test harnesses.
     public static bool Debug = false;
 
     // =========================================================================
-    //  Entry Point
+    //  SECTION 2 — Entry Point & Argument Dispatch
     // =========================================================================
 
     private static int Main(string[] args)
@@ -46,6 +46,7 @@ internal static class Program
 
             if (string.Equals(args[0], "perft", StringComparison.OrdinalIgnoreCase))
                 return HandlePerftCommand(args);
+
             if (string.Equals(args[0], "bench", StringComparison.OrdinalIgnoreCase))
                 return HandleBenchCommand(args);
 
@@ -69,39 +70,8 @@ internal static class Program
         return 1;
     }
 
-    /// <summary>Returns the current time in milliseconds (64-bit, no wraparound).</summary>
-    public static long GetTimeMs() => Environment.TickCount64;
-
     // =========================================================================
-    //  Perft Command Dispatch
-    // =========================================================================
-
-    private static int HandlePerftCommand(string[] args)
-    {
-        if (args.Length >= 2 && string.Equals(args[1], "suite", StringComparison.OrdinalIgnoreCase))
-        {
-            RunPerftSuite();
-            return 0;
-        }
-
-        if (args.Length < 2 || !int.TryParse(args[1], out int depth) || depth < 1)
-        {
-            Console.WriteLine("Error: perft requires a depth >= 1, or the keyword 'suite'.");
-            return 1;
-        }
-
-        string fen = args.Length >= 3 ? args[2] : StartPosition;
-        Board.ParseFEN(fen);
-        RunPerft(depth);
-        return 0;
-    }
-
-    // =========================================================================
-    //  Benchmark
-    //
-    //  Fixed-depth benchmark for measuring search speed and detecting
-    //  regressions. TT is cleared between positions for reproducibility.
-    //  Output format matches Stockfish/Ethereal/OpenBench conventions.
+    //  SECTION 3 — Benchmark Suite
     // =========================================================================
 
     private static readonly string[] BenchPositions =
@@ -112,27 +82,28 @@ internal static class Program
         "r1bqkbnr/pppp1ppp/2n5/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R b KQkq - 3 3",
         "r1bqkbnr/1ppp1ppp/p1n5/1B2p3/4P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 0 4",
 
-        // Middlegame — open / tactical
+        // Middlegame — tactical / open
         "rnbqkb1r/1p2pppp/p2p1n2/8/3NP3/2N5/PPP2PPP/R1BQKB1R w KQkq - 0 6",
         "r1bqkb1r/pppp1ppp/2n2n2/4p2Q/2B1P3/8/PPPP1PPP/RNB1K1NR w KQkq - 4 4",
         "r1bq1rk1/pp2ppbp/2np1np1/8/3NP3/2N1BP2/PPPQ2PP/R3KB1R w KQ - 0 9",
 
-        // Middlegame — closed / positional
+        // Middlegame — positional / closed
         "rnbq1rk1/ppp1ppbp/3p1np1/8/2PPP3/2N2N2/PP3PPP/R1BQKB1R w KQ - 0 7",
         "rnbqkb1r/ppp1pppp/5n2/3p4/2PP4/2N5/PP2PPPP/R1BQKBNR w KQkq - 2 3",
         "rnbqk1nr/pppp1ppp/4p3/8/1bPP4/2N5/PP2PPPP/R1BQKBNR w KQkq - 2 3",
 
-        // Complex / sharp
+        // Complex / sharp positions
         "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1",
         "r3k2r/Pppp1ppp/1b3nbN/nP6/BBP1P3/q4N2/Pp1P2PP/R2Q1RK1 w kq - 0 1",
         "r4rk1/1pp1qppp/p1np1n2/2b1p1B1/2B1P1b1/P1NP1N2/1PP1QPPP/R4RK1 w - - 0 10",
 
-        // Endgame
+        // Endgame positions
         "8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1",
         "8/8/4k3/8/4P3/4K3/8/4R3 w - - 0 1",
         "8/5pk1/6p1/3P4/8/6K1/5P2/8 w - - 0 1",
     ];
 
+    // Runs fixed-depth search benchmark over standard position set.
     private static int HandleBenchCommand(string[] args)
     {
         int depth = 12;
@@ -148,6 +119,9 @@ internal static class Program
         Console.WriteLine($"Benchmark: depth {depth}, {BenchPositions.Length} positions");
         Console.WriteLine();
 
+        // ---------------------------------------------------------------------
+        //  Benchmark Execution Loop
+        // ---------------------------------------------------------------------
         for (int i = 0; i < BenchPositions.Length; i++)
         {
             Board.ParseFEN(BenchPositions[i]);
@@ -181,13 +155,30 @@ internal static class Program
     }
 
     // =========================================================================
-    //  Perft Core
+    //  SECTION 4 — Performance Test (Perft) Core
     // =========================================================================
 
-    /// <summary>
-    /// Recursive perft: counts leaf nodes at the given depth.
-    /// BoardState is passed by 'in' reference to avoid copying ~144 bytes per node.
-    /// </summary>
+    private static int HandlePerftCommand(string[] args)
+    {
+        if (args.Length >= 2 && string.Equals(args[1], "suite", StringComparison.OrdinalIgnoreCase))
+        {
+            RunPerftSuite();
+            return 0;
+        }
+
+        if (args.Length < 2 || !int.TryParse(args[1], out int depth) || depth < 1)
+        {
+            Console.WriteLine("Error: perft requires a depth >= 1, or the keyword 'suite'.");
+            return 1;
+        }
+
+        string fen = args.Length >= 3 ? args[2] : StartPosition;
+        Board.ParseFEN(fen);
+        RunPerft(depth);
+        return 0;
+    }
+
+    // Recursive leaf node counter for move generator verification.
     private static long PerftDriver(int depth)
     {
         if (depth == 0)
@@ -214,10 +205,7 @@ internal static class Program
         return nodes;
     }
 
-    /// <summary>
-    /// Runs perft and prints per-move node counts in the standard format
-    /// used by Stockfish (`go perft N`), plus total nodes, time, and NPS.
-    /// </summary>
+    // Root perft executor: outputs move-by-move move counts (Stockfish style).
     private static long RunPerft(int depth)
     {
         Console.WriteLine();
@@ -261,18 +249,12 @@ internal static class Program
     }
 
     // =========================================================================
-    //  Perft Test Suite
+    //  SECTION 5 — Perft Automated Test Suite
     // =========================================================================
 
-    /// <summary>
-    /// One row of the perft suite. Expected counts from the Chess Programming Wiki.
-    /// </summary>
     private readonly record struct PerftTest(string Fen, int Depth, long Expected, string Name);
 
-    /// <summary>
-    /// Six classical perft positions covering standard play, promotions,
-    /// en passant, castling, pins, and discovered checks.
-    /// </summary>
+    // Standard perft test positions verified against standard reference values.
     private static readonly PerftTest[] PerftSuite =
     [
         new(StartPosition,    5, 4_865_609,  "Startpos"),
@@ -283,9 +265,6 @@ internal static class Program
         new(Position6,        4, 3_894_594,  "Position 6"),
     ];
 
-    /// <summary>
-    /// Runs all perft tests and prints a PASS/FAIL summary.
-    /// </summary>
     private static void RunPerftSuite()
     {
         Console.WriteLine("═══════════════════════════════════════════════════════════════");
@@ -331,4 +310,10 @@ internal static class Program
         Console.WriteLine($"  Overall NPS: {totalNps:N0}");
         Console.WriteLine("═══════════════════════════════════════════════════════════════");
     }
+
+    // =========================================================================
+    //  SECTION 6 — Utilities & Helpers
+    // =========================================================================
+
+    public static long GetTimeMs() => Environment.TickCount64;
 }
