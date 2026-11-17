@@ -6,8 +6,6 @@ using static MoveGenerator;
 using static System.Numerics.BitOperations;
 
 // =============================================================================
-//  Search — Principal Variation Search with iterative deepening.
-//
 //  Score convention:
 //      Positive  = side to move is better
 //      Negative  = opponent is better
