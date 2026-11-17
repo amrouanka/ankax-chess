@@ -1,7 +1,7 @@
 @echo off
 setlocal
 
-set "ANKAX_DEV=%~dp0..\bin\Release\net10.0\win-x64\publish\AnkaX.exe"
+set "ANKAX_DEV=%~dp0..\bin\Release\net10.0\AnkaX.exe"
 set "ANKAX_RELEASE=%~dp0..\releases\AnkaX_1.0.7.exe"
 set "BOOK=%~dp0..\data\noob_3moves.epd"
 set "PGN=%~dp0..\dev_vs_release.pgn"
@@ -23,22 +23,26 @@ set "SPRT_ARGS=-sprt elo0=-1.75 elo1=0.25 alpha=0.05 beta=0.05"
 :: ============================================================
 
 if not exist "%ANKAX_DEV%" (
-    echo [!] Dev build not found: %ANKAX_DEV%
-    echo     Run: dotnet publish -c Release -r win-x64
-    pause & exit /b 1
+    echo [!] Dev build not found: "%ANKAX_DEV%"
+    echo     Run: dotnet build -c Release
+    pause
+    exit /b 1
 )
 if not exist "%ANKAX_RELEASE%" (
-    echo [!] Release build not found: %ANKAX_RELEASE%
-    pause & exit /b 1
+    echo [!] Release build not found: "%ANKAX_RELEASE%"
+    pause
+    exit /b 1
 )
 if not exist "%CUTECHESS%" (
-    echo [!] Cutechess not found: %CUTECHESS%
+    echo [!] Cutechess not found at: "%CUTECHESS%"
     echo     Install from: https://github.com/cutechess/cutechess/releases
-    pause & exit /b 1
+    pause
+    exit /b 1
 )
 if not exist "%BOOK%" (
-    echo [!] Opening book not found: %BOOK%
-    pause & exit /b 1
+    echo [!] Opening book not found: "%BOOK%"
+    pause
+    exit /b 1
 )
 
 echo ============================================
@@ -47,8 +51,8 @@ echo ============================================
 echo.
 
 "%CUTECHESS%" ^
-    -engine name=AnkaX-Dev cmd="%ANKAX_DEV%" proto=uci option.Threads=1 option.Hash=16 ^
-    -engine name=AnkaX cmd="%ANKAX_RELEASE%" proto=uci option.Threads=1 option.Hash=16 ^
+    -engine name=AnkaX-Dev cmd="%ANKAX_DEV%" proto=uci ^
+    -engine name=AnkaX cmd="%ANKAX_RELEASE%" proto=uci ^
     -each tc=10+0.1 ^
     -openings file="%BOOK%" format=epd order=random ^
     -games 20000 -concurrency 4 -repeat -recover ^
