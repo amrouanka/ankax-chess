@@ -6,12 +6,6 @@ using static MoveGenerator;
 using static System.Numerics.BitOperations;
 
 // =============================================================================
-//  Score convention:
-//      Positive  = side to move is better
-//      Negative  = opponent is better
-//      All scores are from the side-to-move's perspective (negamax).
-//      Mate scores encode distance: ±(MateScore − ply).
-//
 //  Move ordering (highest → lowest priority):
 //
 //      Tier 1: TT move          10,000,000
@@ -26,25 +20,12 @@ using static System.Numerics.BitOperations;
 //              Underpromotion      500,000
 //              ─── gap: 483,616 ───
 //      Tier 8: History            -16,384 .. +16,384      (gravity-bounded)
-//
-//  Performance techniques:
-//      1. Flat 1D arrays with bit-shift indexing (avoids multi-dim bounds checks)
-//      2. Pre-expanded LMR and MVV-LVA tables (eliminates log/modulo from hot paths)
-//      3. Hoisted loop invariants (depth-dependent values computed once, not per-move)
-//      4. Pre-allocated MoveList pool (zero heap allocation during search)
-//      5. BoardState by 'in' reference (avoids ~144-byte struct copy per takeback)
-//      6. Insertion sort with early-exit (exploits partial ordering from TT/captures)
-//      7. Static fields cached into locals (keeps bitboards/occupancies in registers)
 // =============================================================================
 
 public static class Search
 {
     // =========================================================================
     //  SECTION 1 — Search parameters
-    //
-    //  All tunable constants live here. Changing a number is the only way to
-    //  retune the search — no structural code needs to move. Grouped by the
-    //  feature they control.
     // =========================================================================
 
     #region Core
@@ -101,8 +82,6 @@ public static class Search
 
     #region History
 
-    // Gravity formula: history += bonus − history × |bonus| / MaxHistory.
-    // Smoothly bounds scores without hard clamping.
     private const int MaxHistory = 16384;
 
     #endregion
@@ -117,18 +96,9 @@ public static class Search
 
     // =========================================================================
     //  SECTION 2 — State and flat-array tables
-    //
-    //  Every table uses flat 1D indexing with bit-shift strides. Row width
-    //  is always a power of two so the index computation is a shift + OR
-    //  instead of a multiply + add. Example:
-    //
-    //      lmrTable[(depth << 6) | moveIndex]     // 64 entries per depth
-    //      historyMoves[(piece << 6) | square]     // 64 squares per piece
-    //
-    //  All arrays are pre-allocated once and reused across searches.
-    //  Array.Clear resets them at the start of each SearchPosition call.
     // =========================================================================
 
+    // Power-of-two row strides allow indexing via (row << shift) | col instead of multiplication.
     private const int LmrRowShift = 6;      // 64 move indices per depth
     private const int PvRowShift = 6;       // 64 PV entries per ply
     private const int PieceShift = 4;       // 16 entries per piece (12 used)
@@ -142,36 +112,26 @@ public static class Search
     public static int lastBestMove = 0;
     public static int lastDepthReached = 0;
 
-    // LMR reduction table: lmrTable[(depth << 6) | moveIndex]
+    // Indexed by: (depth << 6) | moveIndex
     private static readonly int[] lmrTable = new int[(MaxPly + 1) << LmrRowShift];
 
-    // Killer moves: killerMoves[(ply << 1)] and [(ply << 1) + 1].
-    // Adjacent in memory → single cache line for both killers at the same ply.
+    // Indexed by: (ply << 1) for slot 0, (ply << 1) + 1 for slot 1
     private static readonly int[] killerMoves = new int[MaxPly << KillerShift];
 
-    // History heuristic: historyMoves[(piece << 6) | targetSquare]
+    // Indexed by: (piece << 6) | targetSquare
     private static readonly int[] historyMoves = new int[12 << HistoryShift];
 
-    // Counter-move table: counterMoves[(piece << 6) | targetSquare] = best reply.
-    // Indexed by the opponent's previous move. When a quiet move causes a beta
-    // cutoff, it's stored here as the refutation of whatever the opponent played.
-    // 768 ints = 3 KB, always in L1.
+    // Indexed by opponent's previous move: (piece << 6) | targetSquare -> best quiet refutation
     private static readonly int[] counterMoves = new int[12 << HistoryShift];
 
-    // Continuation history: contHistory[prevIndex × 768 + currIndex] = score.
-    // For each opponent move, stores how well each of our replies performed.
-    // Uses the same gravity formula as regular history.
-    // 768 × 768 = 589,824 ints ≈ 2.3 MB, fits in L2.
+    // Indexed by: prevMoveIndex * 768 + currMoveIndex, where moveIndex = (piece << 6) | targetSquare
     private static readonly int[] contHistory = new int[768 * 768];
 
-    // Move stack: moveStack[ply] = move played at this ply. Child nodes look
-    // up their parent's move to index counterMoves and contHistory.
+    // Tracks the move played at each ply so child nodes can look up the parent move
     private static readonly int[] moveStack = new int[MaxPly + 2];
 
-    // One MoveList per ply, pre-allocated to avoid heap pressure during search.
     private static readonly MoveList[] moveLists = new MoveList[MaxPly + 2];
 
-    // MVV-LVA source table (used only during initialization).
     private static readonly int[,] mvvLva =
     {
         { 105, 205, 305, 405, 505, 605 },
@@ -182,24 +142,18 @@ public static class Search
         { 100, 200, 300, 400, 500, 600 },
     };
 
-    // Pre-expanded MVV-LVA: mvvLvaTable[(attacker << 4) | victim].
-    // Eliminates modulo from the hot path.
+    // Indexed by: (attacker << 4) | victim
     private static readonly int[] mvvLvaTable = new int[12 << PieceShift];
 
-    // PV table: pvTable[(ply << 6) | index]
+    // Triangular PV table indexed by: (ply << 6) | index
     private static readonly int[] pvTable = new int[MaxPly << PvRowShift];
     private static readonly int[] pvLength = new int[MaxPly];
 
-    // Repetition detection
     private static readonly ulong[] repetitionTable = new ulong[RepetitionTableSize];
     public static int repetitionIndex = 0;
 
     // =========================================================================
     //  SECTION 3 — One-time initialization
-    //
-    //  Runs on first access. Builds the LMR reduction table (log formula)
-    //  and expands MVV-LVA into a flat lookup so the hot path never computes
-    //  modulo or logarithms.
     // =========================================================================
 
     static Search()
@@ -207,6 +161,7 @@ public static class Search
         for (int i = 0; i < moveLists.Length; i++)
             moveLists[i] = new MoveList();
 
+        // Precompute logarithmic Late Move Reductions table
         for (int depth = 0; depth <= MaxPly; depth++)
         {
             int rowBase = depth << LmrRowShift;
@@ -229,6 +184,7 @@ public static class Search
             }
         }
 
+        // Flatten 6x6 MVV-LVA table across all 12 piece codes to avoid modulo in ScoreMove
         for (int attacker = 0; attacker < 12; attacker++)
         {
             int rowBase = attacker << PieceShift;
@@ -239,15 +195,15 @@ public static class Search
 
     // =========================================================================
     //  SECTION 4 — Iterative deepening entry point
-    //
-    //  Searches from depth 1 upward, using the previous iteration's score
-    //  to set aspiration windows (from depth 4 onward). Outputs UCI info
-    //  lines per iteration and bestmove at the end. Time management can
-    //  abort between iterations or mid-search via TimeManagement.stopped.
     // =========================================================================
 
+    /// <summary>
+    /// Searches the current position up to <paramref name="depth"/> using iterative
+    /// deepening with aspiration windows, and prints UCI info and bestmove output.
+    /// </summary>
     public static void SearchPosition(int depth)
     {
+        // Step 1. Reset search state and heuristic tables
         nodes = 0;
         ply = 0;
         TimeManagement.stopped = false;
@@ -267,10 +223,13 @@ public static class Search
 
         StringBuilder? infoBuilder = Program.Debug ? null : new StringBuilder(256);
 
+        // Step 2. Iterative deepening loop
         for (int currentDepth = 1; currentDepth <= depth; currentDepth++)
         {
             int score;
 
+            // Step 3. Search with a full window at shallow depths, then narrow aspiration windows.
+            // If the score falls outside [alpha, beta], widen the failed bound and re-search.
             if (currentDepth < AspirationMinDepth)
             {
                 score = AlphaBeta(-Infinity, Infinity, currentDepth);
@@ -305,10 +264,12 @@ public static class Search
             if (TimeManagement.stopped)
                 break;
 
+            // Center next iteration's aspiration window around the current score
             alpha = score - AspirationWindow;
             beta = score + AspirationWindow;
             completedDepth = currentDepth;
 
+            // Step 4. Record best root move and report UCI info for the completed iteration
             int rootMove = pvTable[0];
             if (rootMove != 0)
                 bestMove = rootMove;
@@ -333,7 +294,7 @@ public static class Search
                 break;
         }
 
-        // Fallback: if search was stopped before finding a move, pick any legal move
+        // Step 5. Fallback: if time expired before depth 1 finished, pick the first legal move
         if (bestMove == 0)
         {
             ref MoveList moveList = ref moveLists[0];
@@ -375,31 +336,15 @@ public static class Search
 
     // =========================================================================
     //  SECTION 5 — Alpha-beta search (PVS)
-    //
-    //  The hot function. Called recursively for every node in the search tree.
-    //  Uses fail-soft scoring: the returned value is the actual best score
-    //  found, not clamped to the [alpha, beta] window.
-    //
-    //  Node types:
-    //      PV node  — beta − alpha > 1 (full window, expecting exact score)
-    //      Cut node — zero-window, expected to fail high
-    //      All node — zero-window, expected to fail low
-    //
-    //  The order of pruning techniques follows a standard pattern:
-    //      1. Repetition / 50-move draws (cheapest check)
-    //      2. Check extension (before horizon test)
-    //      3. Mate distance pruning
-    //      4. TT probe (may return immediately in non-PV nodes)
-    //      5. Static eval (needed by all pruning below)
-    //      6. Reverse futility pruning (eval >> beta → prune)
-    //      7. Null move pruning (skip our turn → still >= beta?)
-    //      8. IIR (no TT move → reduce depth by 1)
-    //      9. Futility pruning flag (applied per-move in the loop)
-    //     10. Move loop with LMR
     // =========================================================================
 
+    /// <summary>
+    /// Fail-soft Principal Variation Search (negamax). Returns the score from
+    /// the side-to-move's perspective.
+    /// </summary>
     private static int AlphaBeta(int alpha, int beta, int depth, bool allowNullMove = true)
     {
+        // Step 1. Periodic time check and draw detection (repetition & 50-move rule)
         if ((nodes & TimeCheckMask) == 0)
             TimeManagement.Communicate();
 
@@ -409,14 +354,13 @@ public static class Search
         int currentPly = ply;
         pvLength[currentPly] = currentPly;
 
-        // --- Draws ---
         if (currentPly > 0 && IsRepetition())
             return 0;
 
         if (halfmoveClock >= 100)
             return 0;
 
-        // --- Check extension ---
+        // Step 2. Check extension and horizon drop into Quiescence search
         bool inCheck = IsInCheck();
         if (inCheck && currentPly < MaxPly - 10)
             depth++;
@@ -429,7 +373,7 @@ public static class Search
 
         nodes++;
 
-        // --- Mate distance pruning ---
+        // Step 3. Mate distance pruning: narrow window if a shorter mate was already found
         int matingScore = MateScore - currentPly;
         if (matingScore < beta)
         {
@@ -448,7 +392,7 @@ public static class Search
 
         bool pvNode = (beta - alpha) > 1;
 
-        // --- TT probe ---
+        // Step 4. Transposition table probe (cutoffs allowed only in non-PV nodes)
         ulong hashKey = Zobrist.hashKey;
 
         int ttMove = 0;
@@ -458,14 +402,14 @@ public static class Search
         if (ttScore != TranspositionTable.NoScore && !pvNode)
             return ttScore;
 
-        // --- Static eval ---
+        // Step 5. Static evaluation
         int staticEval = inCheck ? -MateScore : Evaluation.Evaluate();
 
-        // & (not &&): branchless — both sides always evaluated
         bool quietNode = !pvNode & !inCheck;
         bool prunableNode = quietNode & (currentPly > 0);
 
-        // --- Reverse futility pruning ---
+        // Step 6. Reverse futility pruning: if static eval is well above beta at shallow
+        // depth, assume the position will still fail high even if we lose a margin per ply.
         if (prunableNode &&
             depth <= ReverseFutilityMaxDepth &&
             staticEval > -MateThreshold &&
@@ -475,7 +419,8 @@ public static class Search
                 return beta;
         }
 
-        // --- Null move pruning ---
+        // Step 7. Null move pruning: pass our turn and search with reduced depth.
+        // Disabled in pawn-only endgames to avoid missing zugzwang.
         if (prunableNode &&
             depth >= NullMoveMinDepth &&
             allowNullMove &&
@@ -514,17 +459,15 @@ public static class Search
                 return beta;
         }
 
-        // --- IIR: reduce depth when no TT move is available ---
-        // The !inCheck guard prevents canceling the check extension above.
+        // Step 8. Internal iterative reduction (IIR): reduce depth when no TT move exists to guide ordering
         if (depth >= 4 && ttMove == 0 && !inCheck)
             depth--;
 
-        // --- Futility flag (applied per-move in the loop) ---
+        // Step 9. Prepare futility flag, parent move context, and sorted move list
         bool canPrune = false;
         if (quietNode && depth <= FutilityMaxDepth)
             canPrune = staticEval + FutilityMarginPerDepth * depth <= alpha;
 
-        // --- Parent move lookup for counter-move + continuation history ---
         int prevMove = currentPly > 0 ? moveStack[currentPly - 1] : 0;
         int counterMove = 0;
         int prevContIndex = -1;
@@ -536,7 +479,6 @@ public static class Search
             counterMove = counterMoves[prevContIndex];
         }
 
-        // --- Generate and sort moves ---
         ref MoveList moveList = ref moveLists[currentPly];
         GenerateMoves(ref moveList);
 
@@ -552,7 +494,6 @@ public static class Search
         int[] moves = moveList.moves;
         int moveCount = moveList.count;
 
-        // Hoisted loop invariants
         int newDepth = depth - 1;
         int depthSquared = depth * depth;
         int lmrRowBase = depth << LmrRowShift;
@@ -560,7 +501,7 @@ public static class Search
         int nextPly = currentPly + 1;
         int childRowBase = nextPly << PvRowShift;
 
-        // --- Move loop ---
+        // Step 10. Iterate through moves
         int movesSearched = 0;
         int bestScore = -Infinity;
         int bestMove = 0;
@@ -575,13 +516,14 @@ public static class Search
 
             bool isQuiet = (GetMoveCapture(move) == 0) & (promoted == 0);
 
-            // Futility: skip quiet moves when static eval is far below alpha
+            // Step 10a. Futility pruning: skip late quiet moves if static eval is far below alpha
             if (canPrune && movesSearched > 0 && isQuiet && move != ttMove)
             {
                 anyMovePruned = true;
                 continue;
             }
 
+            // Step 10b. Make move and filter out illegal moves that leave the king in check
             BoardState state = CopyBoard();
             if (MakeMove(move) == 0)
             {
@@ -596,14 +538,14 @@ public static class Search
 
             int score;
 
+            // Step 10c. Principal Variation Search (PVS) with Late Move Reductions (LMR)
             if (movesSearched == 0)
             {
-                // First move: full-window PVS search
                 score = -AlphaBeta(-beta, -alpha, newDepth);
             }
             else
             {
-                // LMR for quiet moves searched after the first few
+                // Reduce depth for late quiet moves
                 if (movesSearched >= FullDepthMoves &&
                     depth >= ReductionLimit &&
                     isQuiet && !inCheck)
@@ -621,10 +563,11 @@ public static class Search
                 }
                 else
                 {
-                    score = alpha + 1;  // Force re-search below
+                    score = alpha + 1;  // Force unreduced zero-window search below
                 }
 
-                // PVS re-search: reduced/null-window beat alpha → verify
+                // If reduced search beat alpha (or LMR was skipped), verify at full depth with zero window,
+                // then re-search with full window if it still improves alpha inside a PV node.
                 if (score > alpha)
                 {
                     score = -AlphaBeta(-alpha - 1, -alpha, newDepth);
@@ -649,7 +592,7 @@ public static class Search
                 bestMove = move;
             }
 
-            // --- Beta cutoff ---
+            // Step 10d. Beta cutoff (fail-high): update quiet move heuristics and store lower bound in TT
             if (score >= beta)
             {
                 if (isQuiet)
@@ -675,7 +618,7 @@ public static class Search
                 return bestScore;
             }
 
-            // --- Alpha improvement ---
+            // Step 10e. Alpha improvement: update history and propagate child PV line
             if (score > alpha)
             {
                 if (isQuiet)
@@ -701,9 +644,10 @@ public static class Search
             }
         }
 
-        // --- Terminal node ---
+        // Step 11. Checkmate / stalemate check and TT storage
         if (legalMoves == 0)
         {
+            // If we skipped moves via futility pruning, we cannot prove stalemate
             if (anyMovePruned)
                 return staticEval;
 
@@ -718,15 +662,15 @@ public static class Search
 
     // =========================================================================
     //  SECTION 6 — Quiescence search
-    //
-    //  Captures-only search at the horizon to avoid the horizon effect.
-    //  Stand-pat evaluation provides a lower bound. Delta pruning skips
-    //  captures whose material gain cannot possibly raise alpha.
-    //  When in check, all moves are generated (evasion search).
     // =========================================================================
 
+    /// <summary>
+    /// Searches tactical sequences (captures and promotions, or all evasions
+    /// when in check) until a quiet position is reached.
+    /// </summary>
     public static int Quiescence(int alpha, int beta)
     {
+        // Step 1. Time check and draw/ply limits
         if ((nodes & TimeCheckMask) == 0)
             TimeManagement.Communicate();
 
@@ -745,7 +689,8 @@ public static class Search
 
         bool inCheck = IsInCheck();
 
-        // Stand pat: the side to move can usually choose not to capture
+        // Step 2. Stand-pat evaluation: when not in check, the side to move can decline
+        // all captures, so the static evaluation acts as a lower bound on the score.
         int eval = 0;
         if (!inCheck)
         {
@@ -758,6 +703,7 @@ public static class Search
                 alpha = eval;
         }
 
+        // Step 3. Generate moves: all evasions if in check, captures only otherwise
         ref MoveList moveList = ref moveLists[currentPly];
         if (inCheck)
             GenerateMoves(ref moveList);
@@ -777,11 +723,12 @@ public static class Search
         int legalMoves = 0;
         int deltaBase = eval + QsDeltaMargin;
 
+        // Step 4. Iterate through tactical moves (or check evasions)
         for (int i = 0; i < moveCount; i++)
         {
             int move = moves[i];
 
-            // Delta pruning: skip captures that can't raise alpha
+            // Delta pruning: skip captures whose material gain + margin still cannot reach alpha
             if (!inCheck)
             {
                 int promoted = GetMovePromoted(move);
@@ -815,6 +762,7 @@ public static class Search
                 alpha = score;
         }
 
+        // Step 5. If in check and no legal evasion exists, return checkmate score
         if (inCheck && legalMoves == 0)
             return -MateScore + currentPly;
 
@@ -823,17 +771,12 @@ public static class Search
 
     // =========================================================================
     //  SECTION 7 — Move ordering
-    //
-    //  Scores every move in the list then sorts descending with insertion
-    //  sort. Insertion sort outperforms quicksort on small, partially-ordered
-    //  lists — TT/captures cluster at the front naturally, so the early-exit
-    //  skip fires frequently.
-    //
-    //  The tier gaps (see header) prevent history scores from contaminating
-    //  heuristic ordering. MVV-LVA ensures PxQ > QxP (capturing with the
-    //  least valuable piece is preferred).
     // =========================================================================
 
+    /// <summary>
+    /// Scores all moves in <paramref name="moveList"/> and sorts them descending
+    /// using insertion sort.
+    /// </summary>
     private static void SortMoves(
         ref MoveList moveList,
         int ttMove, int pvMove,
@@ -857,7 +800,6 @@ public static class Search
             scores[i] = ScoreMove(moves[i], ttMove, pvMove, killer1, killer2,
                                   counterMove, prevContRowBase);
 
-        // Insertion sort with early-exit: skip elements already in order
         for (int i = 1; i < count; i++)
         {
             int score = scores[i];
@@ -907,7 +849,6 @@ public static class Search
         if (GetMoveCastling(move) != 0) return 600_000;
         if (promoted != 0) return 500_000;
 
-        // History + continuation history, gravity-bounded
         int currIndex = (GetMovePiece(move) << HistoryShift) | target;
         int history = historyMoves[currIndex];
         if (prevContRowBase >= 0)
@@ -917,13 +858,7 @@ public static class Search
 
     // =========================================================================
     //  SECTION 8 — Helpers
-    //
-    //  Small utility methods used by the search. All are marked for
-    //  aggressive inlining since they're called millions of times per second
-    //  and consist of a few instructions each.
     // =========================================================================
-
-    // --- Repetition detection ------------------------------------------------
 
     public static void AddToRepetitionHistory(ulong hashKey)
     {
@@ -937,6 +872,11 @@ public static class Search
             repetitionIndex--;
     }
 
+    /// <summary>
+    /// Checks if the current position hash has appeared earlier in the game or search.
+    /// Steps back by 2 plies (same side to move) and stops at the last irreversible
+    /// move (bounded by <see cref="Board.halfmoveClock"/>).
+    /// </summary>
     private static bool IsRepetition()
     {
         int index = repetitionIndex;
@@ -959,8 +899,6 @@ public static class Search
         return false;
     }
 
-    // --- UCI score formatting ------------------------------------------------
-
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static bool IsMateScore(int score) =>
         score >= MateThreshold || score <= -MateThreshold;
@@ -972,8 +910,6 @@ public static class Search
     private static string FormatUciScore(int score) =>
         IsMateScore(score) ? $"mate {ScoreToMate(score)}" : $"cp {score}";
 
-    // --- Board queries -------------------------------------------------------
-
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static bool IsInCheck()
     {
@@ -984,10 +920,6 @@ public static class Search
         return PieceAttacks.IsSquareAttacked(kSq, sideToMove ^ 1);
     }
 
-    /// <summary>
-    /// Finds which piece occupies a square by scanning all 12 bitboards.
-    /// Ordered by frequency: pawns first, kings last.
-    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static int GetPieceAtSquare(int square)
     {
@@ -1031,11 +963,10 @@ public static class Search
         _ => 0
     };
 
-    // --- History updates -----------------------------------------------------
-
-    // Gravity formula: score drifts toward zero over time, preventing any
-    // single position from permanently dominating the history table.
-
+    /// <summary>
+    /// Updates history using the gravity formula: <c>h += bonus - h * |bonus| / MaxHistory</c>,
+    /// which smoothly bounds values within [-MaxHistory, +MaxHistory] and decays old scores.
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void UpdateHistory(int move, int bonus)
     {
