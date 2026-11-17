@@ -6,7 +6,7 @@
 //  reached via different move orders (transpositions).
 //
 //  Configuration:
-//    Size:       1 << 20 = 1,048,576 entries ≈ 24 MB
+//    Size:       16 MB = 699,050 max entries = 524,288 entries (12.5 MB)
 //    Strategy:   Always-replace (newest entry overwrites oldest)
 //    Indexing:   hashKey & (TableSize - 1) — fast bitwise modulo
 //
