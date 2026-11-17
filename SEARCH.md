@@ -376,17 +376,28 @@ a cutoff at the last move prunes nothing.
 
 ### Ordering priority (highest first)
 
-| Priority | Move type | Score |
-| ---------- | ----------- | ------- |
-| 1 | TT move | 30000 |
-| 2 | Queen promotion | 29000 |
-| 3 | PV move (root only) | 20000 |
-| 4 | Captures (MVV-LVA) | 10100–10605 |
-| 5 | Killer 1 | 9000 |
-| 6 | Killer 2 | 8000 |
-| 7 | Castling | 7500 |
-| 8 | Other promotions | 7200 |
-| 9 | Quiet moves (history) | -7000 to +7000 |
+| Tier | Move type | Score / Range |
+| :--- | :--- | :--- |
+| **Tier 1** | TT move | 10,000,000 |
+| **Tier 2** | Queen promotion | 9,000,000 |
+| **Tier 3** | PV move (root only) | 8,000,000 |
+| **Tier 4** | Captures (MVV-LVA) | 1,000,100 .. 1,000,605 |
+| **Tier 5** | Killer 1 / Killer 2 | 900,000 / 800,000 |
+| **Tier 6** | Counter-move | 700,000 |
+| **Tier 7** | Castling / Underpromotions | 600,000 / 500,000 |
+| **Tier 8** | History moves (gravity-bounded) | -16,384 .. +16,384 |
+Tier 1: TT move 10,000,000
+Tier 2: Q-promotion 9,000,000
+Tier 3: PV move 8,000,000
+Tier 4: Captures 1,000,100 .. 1,000,605 (MVV-LVA)
+─── gap: 83,716 ───
+Tier 5: Killer 1 900,000
+Killer 2 800,000
+Tier 6: Counter-move 700,000
+Tier 7: Castling 600,000
+Underpromotion 500,000
+─── gap: 483,616 ───
+Tier 8: History -16,384 .. +16,384 (gravity-bounded)
 
 ### MVV-LVA (Most Valuable Victim / Least Valuable Attacker)
 
