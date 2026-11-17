@@ -1,45 +1,37 @@
-// =============================================================================
-//  AnkaX Transposition Table
-// =============================================================================
-//
-//  A hash table that caches search results to avoid re-searching positions
-//  reached via different move orders (transpositions).
-//
-//  Configuration:
-//    Size:       16 MB = 699,050 max entries = 524,288 entries (12.5 MB)
-//    Strategy:   Always-replace (newest entry overwrites oldest)
-//    Indexing:   hashKey & (TableSize - 1) — fast bitwise modulo
-//
-//  Mate score handling:
-//    Mate scores are stored relative to the root (e.g., "mate in 3 from root").
-//    When probed at a different ply, the score must be adjusted so it reflects
-//    the distance from the CURRENT node, not the original root.
-//
-//    Store:  score += ply   (root-relative → absolute)
-//    Probe:  score -= ply   (absolute → current-relative)
-//
-//    Example:
-//      Ply 0 search finds mate in 3 → score = 49000 - 3 = 48997
-//      Store at ply 0: 48997 + 0 = 48997 (absolute)
-//      Probe at ply 2: 48997 - 2 = 48995 → "mate in 1 from here" ✓
-//
-//  Flag semantics (fail-soft):
-//    Exact — score is the true minimax value (alpha < score < beta)
-//    Alpha — score is an upper bound (failed low, true score ≤ stored)
-//    Beta  — score is a lower bound (failed high, true score ≥ stored)
-//
-// =============================================================================
-
 using System.Runtime.CompilerServices;
 
+// =============================================================================
+//  AnkaX Transposition Table
+//
+//  Caches search results to prune redundant subtrees reached via transpositions.
+//
+//  Indexing:
+//      Size is always rounded down to a power of 2 so index lookup uses a fast
+//      bitwise mask (`hashKey & indexMask`) instead of expensive modulo.
+//
+//  Replacement Strategy:
+//      Always-replace scheme (newest entry overwrites the slot).
+//
+//  Mate Score Normalization:
+//      Mate scores are stored relative to root (absolute distance) so they remain
+//      valid when probed at different ply depths in another search branch:
+//          Store:  score >  48000 -> score += ply
+//          Probe:  score >  48000 -> score -= ply
+//
+//  Bound Flags (Fail-Soft):
+//      Exact — True minimax score (alpha < score < beta)
+//      Alpha — Upper bound (fail-low: true score <= score)
+//      Beta  — Lower bound (fail-high: true score >= score)
+// =============================================================================
+
 /// <summary>
-/// Describes the type of score stored in a transposition table entry.
+/// Indicates the score bound type of a transposition table entry.
 /// </summary>
 public enum TTFlag
 {
-    Exact,  // True minimax score (search fell within the alpha-beta window)
-    Alpha,  // Upper bound (search failed low — real score ≤ this value)
-    Beta    // Lower bound (search failed high — real score ≥ this value)
+    Exact,  // Score is exact (within alpha-beta window)
+    Alpha,  // Score is an upper bound (failed low)
+    Beta    // Score is a lower bound (failed high)
 }
 
 /// <summary>
@@ -47,50 +39,40 @@ public enum TTFlag
 /// </summary>
 public struct TTEntry
 {
-    public ulong hashKey;  // Full Zobrist hash for collision detection
-    public int depth;      // Search depth that produced this entry
-    public int score;      // Evaluation score (mate-adjusted, absolute)
-    public TTFlag flag;    // Score type: exact, upper bound, or lower bound
-    public int bestMove;   // Best move found (used for ordering even on depth miss)
+    public ulong hashKey;  // Zobrist hash key for collision verification
+    public int depth;      // Depth of the search that produced this entry
+    public int score;      // Evaluation score (mate-adjusted)
+    public TTFlag flag;    // Bound type (Exact, Alpha, or Beta)
+    public int bestMove;   // Best move found in this position
 }
 
 public static class TranspositionTable
 {
     // =========================================================================
-    //  Configuration
+    //  SECTION 1 — Configuration and State
     // =========================================================================
 
-    // Default size matches the UCI "default 16" advertisement.
     public const int DefaultHashMb = 16;
     public const int MinHashMb = 1;
     public const int MaxHashMb = 1024;
 
-    // Table is sized to a power of 2 so indexing uses a cheap bitwise AND
-    // instead of a modulo. When the user requests N MB, we round DOWN to the
-    // largest power-of-2 entry count that fits in N MB.
-    private static TTEntry[] table = [];
-    private static int indexMask;   // = table.Length - 1 (valid because length is power of 2)
-
-    /// <summary>
-    /// Sentinel returned by Probe when no usable entry is found.
-    /// </summary>
     public const int NoScore = int.MinValue;
 
-    // One-time init so the engine has a working table even if no setoption is sent.
+    private static TTEntry[] table = [];
+    private static int indexMask;
+
+    // =========================================================================
+    //  SECTION 2 — Sizing and Initialization
+    // =========================================================================
+
     static TranspositionTable()
     {
         Resize(DefaultHashMb);
     }
 
-    // =========================================================================
-    //  Sizing
-    // =========================================================================
-
     /// <summary>
-    /// Resizes the table to use approximately <paramref name="megabytes"/> of memory.
-    /// Rounds DOWN to the nearest power of 2 entry count so index masking stays
-    /// a single bitwise AND. Always clears the table afterwards — old entries
-    /// would hash to wrong indices under the new mask.
+    /// Resizes the table to use up to <paramref name="megabytes"/> of memory,
+    /// rounding down to the nearest power-of-two entry count.
     /// </summary>
     public static void Resize(int megabytes)
     {
@@ -101,7 +83,6 @@ public static class TranspositionTable
         long requestedBytes = (long)megabytes * 1024 * 1024;
         long maxEntries = requestedBytes / entrySize;
 
-        // Round DOWN to nearest power of 2. Ensures indexMask works correctly.
         int entries = 1;
         while ((long)entries * 2 <= maxEntries)
             entries *= 2;
@@ -110,24 +91,28 @@ public static class TranspositionTable
         indexMask = entries - 1;
     }
 
-    // =========================================================================
-    //  Public API (indexing updated to use indexMask)
-    // =========================================================================
-
+    /// <summary>
+    /// Clears all entries in the transposition table.
+    /// </summary>
     public static void Clear() => Array.Clear(table, 0, table.Length);
 
+    // =========================================================================
+    //  SECTION 3 — Table Operations (Store & Probe)
+    // =========================================================================
+
     /// <summary>
-    /// Stores a search result in the table using always-replace strategy.
-    /// Mate scores are converted from ply-relative to absolute before storing.
+    /// Stores a search result in the table using the always-replace scheme.
     /// </summary>
     public static void Store(ulong hashkey, int depth, int score, int move, TTFlag flag, int ply)
     {
+        // Step 1. Compute entry index using bitwise mask
         int index = (int)(hashkey & (ulong)indexMask);
 
-        // Convert mate scores from ply-relative to absolute
+        // Step 2. Normalize mate score to root-relative distance
         if (score > 48000) score += ply;
         else if (score < -48000) score -= ply;
 
+        // Step 3. Write entry
         table[index] = new TTEntry
         {
             hashKey = hashkey,
@@ -139,35 +124,33 @@ public static class TranspositionTable
     }
 
     /// <summary>
-    /// Looks up a position in the table. Returns a cutoff score if the entry
-    /// is deep enough and the bound allows it, or NoScore otherwise.
-    /// Always sets ttMove to the stored best move (useful for move ordering
-    /// even when the score cannot be used due to insufficient depth).
+    /// Probes the table for a stored position. Sets <paramref name="ttMove"/> for
+    /// move ordering regardless of whether a score cutoff occurs.
     /// </summary>
     public static int Probe(ulong hashkey, int depth, int alpha, int beta, int ply, out int ttMove)
     {
         ttMove = 0;
 
+        // Step 1. Compute index and verify hash key
         int index = (int)(hashkey & (ulong)indexMask);
         TTEntry entry = table[index];
 
-        // Hash collision check: different positions can map to the same index
         if (entry.hashKey != hashkey)
             return NoScore;
 
-        // Always return the stored move for ordering, even on depth miss
+        // Step 2. Always supply the stored best move for move ordering
         ttMove = entry.bestMove;
 
-        // Depth check: only trust scores from searches at least as deep as needed
+        // Step 3. Ensure stored depth is sufficient for a cutoff
         if (entry.depth < depth)
             return NoScore;
 
-        // Convert mate scores from absolute back to ply-relative
+        // Step 4. Adjust mate score back to ply-relative distance
         int score = entry.score;
         if (score > 48000) score -= ply;
         else if (score < -48000) score += ply;
 
-        // Attempt cutoff based on the stored bound type
+        // Step 5. Evaluate cutoff conditions (fail-soft score return)
         switch (entry.flag)
         {
             case TTFlag.Exact:
