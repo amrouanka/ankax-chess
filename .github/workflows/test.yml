@@ -14,7 +14,7 @@ on:
       games_per_shard:
         description: "Games per shard (must be even)"
         required: true
-        default: "800"
+        default: "700"
 
 jobs:
   test:
@@ -119,7 +119,7 @@ jobs:
             -each tc="$TC" \
             -games 2 -rounds "$HALF" \
             -repeat 2 \
-            -openings file=dev_src/books/UHO_4060_v4.epd \
+            -openings file=dev_src/data/UHO_4060_v4.epd \
               format=epd order=random plies=12 \
             -resign movecount=3 score=400 \
             -draw movenumber=30 movecount=5 score=10 \
