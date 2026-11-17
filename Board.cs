@@ -1,9 +1,16 @@
 using static CastlingRights;
-using static Square;
 using static MoveGenerator;
+using static Square;
 
 // =============================================================================
-//  Bitboard helpers — single-instruction wrappers inlined by the JIT.
+//  AnkaX Board Representation & State
+//
+//  Maintains static global bitboard state, piece mappings, FEN parsing,
+//  and lightweight state snapshotting for move make/takeback.
+// =============================================================================
+
+// =============================================================================
+//  SECTION 1 — Bitboard Helper Operations
 // =============================================================================
 
 public static class BitboardOperations
@@ -13,15 +20,12 @@ public static class BitboardOperations
 }
 
 // =============================================================================
-//  Board state, FEN parsing, copy/takeback.
-//
-//  All state is stored in static fields for fast access from the hot search
-//  loop. This means the engine is single-threaded — a deliberate trade-off
-//  for simplicity at the current stage.
+//  SECTION 2 — Board State & Constants
 // =============================================================================
 
 public static class Board
 {
+    // Piece codes
     public const int P = 0, N = 1, B = 2, R = 3, Q = 4, K = 5;
     public const int p = 6, n = 7, b = 8, r = 9, q = 10, k = 11;
 
@@ -43,14 +47,10 @@ public static class Board
         ['k'] = k
     };
 
-    /// <summary>
-    /// Maps piece codes to lowercase promotion characters.
-    /// Indices 0–5 (white P–K) and 6–11 (black p–k); only N/B/R/Q are valid.
-    /// </summary>
     public static readonly char[] promotedPieces =
     [
-        ' ', 'n', 'b', 'r', 'q', ' ',   // white P..K
-        ' ', 'n', 'b', 'r', 'q', ' '    // black p..k
+        ' ', 'n', 'b', 'r', 'q', ' ',   // White P..K
+        ' ', 'n', 'b', 'r', 'q', ' '    // Black p..k
     ];
 
     public static readonly string[] squareToCoordinates =
@@ -65,6 +65,7 @@ public static class Board
         "a1","b1","c1","d1","e1","f1","g1","h1"
     ];
 
+    // Global board state
     public static ulong[] bitboards = new ulong[12];
     public static ulong[] occupancies = new ulong[3];
     public static int side;
@@ -73,11 +74,16 @@ public static class Board
     public static int halfmoveClock;
 
     // =========================================================================
-    //  FEN Parsing
+    //  SECTION 3 — FEN Parsing
     // =========================================================================
 
+    /// <summary>
+    /// Parses a FEN string and initializes all board bitboards, occupancy layers,
+    /// game state flags, and the Zobrist hash key.
+    /// </summary>
     public static void ParseFEN(string fen)
     {
+        // Step 1. Reset current state
         Array.Clear(bitboards);
         Array.Clear(occupancies);
         side = White;
@@ -88,7 +94,7 @@ public static class Board
         string[] parts = fen.Split(' ', StringSplitOptions.RemoveEmptyEntries);
         if (parts.Length < 4) return;
 
-        // Piece placement
+        // Step 2. Parse piece placement
         int rank = 0, file = 0;
         foreach (char c in parts[0])
         {
@@ -101,10 +107,10 @@ public static class Board
             }
         }
 
-        // Active color
+        // Step 3. Parse active color
         side = parts[1] == "w" ? White : Black;
 
-        // Castling rights
+        // Step 4. Parse castling rights
         foreach (char c in parts[2])
         {
             switch (c)
@@ -116,22 +122,26 @@ public static class Board
             }
         }
 
-        // En passant target
+        // Step 5. Parse en passant target square
         if (parts[3] != "-")
             enPassant = ((8 - (parts[3][1] - '0')) << 3) | (parts[3][0] - 'a');
 
-        // Halfmove clock
+        // Step 6. Parse halfmove clock
         if (parts.Length > 4 && int.TryParse(parts[4], out int hm))
             halfmoveClock = hm;
 
+        // Step 7. Rebuild occupancy bitboards and initial Zobrist hash
         UpdateOccupancies();
         Zobrist.hashKey = Zobrist.GenerateHashKey();
     }
 
     // =========================================================================
-    //  Occupancy
+    //  SECTION 4 — Occupancy Layer Rebuild
     // =========================================================================
 
+    /// <summary>
+    /// Recomputes White, Black, and Combined occupancy bitboards from piece bitboards.
+    /// </summary>
     public static void UpdateOccupancies()
     {
         occupancies[White] =
@@ -146,9 +156,12 @@ public static class Board
     }
 
     // =========================================================================
-    //  Copy / TakeBack
+    //  SECTION 5 — State Snapshot (Copy & Takeback)
     // =========================================================================
 
+    /// <summary>
+    /// Creates a value snapshot of the current board state for move execution.
+    /// </summary>
     public static BoardState CopyBoard()
     {
         return new BoardState
@@ -177,17 +190,15 @@ public static class Board
     }
 
     /// <summary>
-    /// Restores the board from a snapshot. The 'in' parameter passes a readonly
-    /// reference, avoiding a ~144-byte struct copy per call.
+    /// Restores the board state from a snapshot. The <c>in</c> modifier avoids
+    /// copying the ~144-byte struct by passing a readonly reference.
     /// </summary>
     public static void TakeBack(in BoardState state)
     {
-        bitboards[0] = state.bb0; bitboards[1] = state.bb1;
-        bitboards[2] = state.bb2; bitboards[3] = state.bb3;
-        bitboards[4] = state.bb4; bitboards[5] = state.bb5;
-        bitboards[6] = state.bb6; bitboards[7] = state.bb7;
-        bitboards[8] = state.bb8; bitboards[9] = state.bb9;
-        bitboards[10] = state.bb10; bitboards[11] = state.bb11;
+        bitboards[0] = state.bb0; bitboards[1] = state.bb1; bitboards[2] = state.bb2;
+        bitboards[3] = state.bb3; bitboards[4] = state.bb4; bitboards[5] = state.bb5;
+        bitboards[6] = state.bb6; bitboards[7] = state.bb7; bitboards[8] = state.bb8;
+        bitboards[9] = state.bb9; bitboards[10] = state.bb10; bitboards[11] = state.bb11;
 
         occupancies[0] = state.occ0;
         occupancies[1] = state.occ1;

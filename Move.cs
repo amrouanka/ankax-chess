@@ -1,22 +1,32 @@
 using static Board;
 
 // =============================================================================
-//  Move encoding — packs all move info into a single 32-bit int.
+//  AnkaX Move Data Structures
 //
-//  Bit layout:
-//    0–5   source square    (6 bits, 0–63)
-//    6–11  target square    (6 bits, 0–63)
-//    12–15 piece            (4 bits, 0–11)
-//    16–19 promoted piece   (4 bits, 0–11; 0 = no promotion)
-//    20    capture flag     (1 bit)
-//    21    double push flag (1 bit)
-//    22    en passant flag  (1 bit)
-//    23    castling flag    (1 bit)
-//    24–31 unused
+//  Compact 32-bit move encoding, fixed-capacity move container, and flat
+//  board state snapshot for copy/takeback.
+//
+//  Move Bit Layout (32-bit int):
+//      0–5   Source square     (6 bits, 0–63)
+//      6–11  Target square     (6 bits, 0–63)
+//      12–15 Piece             (4 bits, 0–11)
+//      16–19 Promoted piece    (4 bits, 0–11; 0 = none)
+//      20    Capture flag      (1 bit)
+//      21    Double push flag  (1 bit)
+//      22    En passant flag   (1 bit)
+//      23    Castling flag     (1 bit)
+//      24–31 Unused
+// =============================================================================
+
+// =============================================================================
+//  SECTION 1 — Move Encoding (32-bit Integer)
 // =============================================================================
 
 public static class MoveEncoding
 {
+    /// <summary>
+    /// Packs all move attributes into a single 32-bit integer.
+    /// </summary>
     public static int EncodeMove(int source, int target, int piece, int promoted,
         int capture, int @double, int enpassant, int castling)
     {
@@ -39,7 +49,9 @@ public static class MoveEncoding
     public static int GetMoveEnpassant(int move) => move & 0x400000;
     public static int GetMoveCastling(int move) => move & 0x800000;
 
-    /// <summary>Returns the move in UCI long algebraic notation (e.g. "e2e4", "e7e8q").</summary>
+    /// <summary>
+    /// Converts an encoded move to UCI long algebraic notation (e.g. "e2e4", "e7e8q").
+    /// </summary>
     public static string GetMove(int move) =>
         $"{squareToCoordinates[GetMoveSource(move)]}" +
         $"{squareToCoordinates[GetMoveTarget(move)]}" +
@@ -49,10 +61,13 @@ public static class MoveEncoding
 }
 
 // =============================================================================
-//  Move list — 256 slots covers the theoretical maximum of 218 legal moves.
-//  The struct is a value type but the backing arrays are heap-allocated.
+//  SECTION 2 — Move List Container
 // =============================================================================
 
+/// <summary>
+/// Fixed-capacity container holding up to 256 moves and their ordering scores.
+/// Pre-allocated per search ply to eliminate heap allocations during search.
+/// </summary>
 public struct MoveList
 {
     public int[] moves;
@@ -68,10 +83,13 @@ public struct MoveList
 }
 
 // =============================================================================
-//  Board state snapshot for copy/takeback. Flat fields (not arrays) so the
-//  struct is a single contiguous block that copies efficiently.
+//  SECTION 3 — Board State Snapshot
 // =============================================================================
 
+/// <summary>
+/// Flat value snapshot of the complete board state for fast copy/takeback.
+/// Contains no array references so it copies contiguously on stack pass.
+/// </summary>
 public struct BoardState
 {
     public ulong bb0, bb1, bb2, bb3, bb4, bb5;

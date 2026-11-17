@@ -3,59 +3,34 @@ using static Board;
 using static MoveGenerator;
 
 // =============================================================================
-//  Zobrist hashing — incremental position fingerprinting for the transposition
-//  table and repetition detection.
+//  AnkaX Zobrist Hashing
 //
-//  Each piece on each square, each castling-right combination, each en-passant
-//  file, and the side-to-move flag gets a unique random 64-bit key. The
-//  position hash is the XOR of all active keys. Because XOR is its own inverse,
-//  MakeMove/UnmakeMove can update the hash incrementally in O(1) by XORing
-//  out the old keys and XORing in the new ones — no full rebuild needed.
+//  Incremental position fingerprint for TT and repetition detection.
 //
-//  The random keys are generated once at startup with a xorshift32 PRNG seeded
-//  with the conventional value 1804289383 (same seed used by Stockfish
-//  so positions are cross-comparable during debugging).
+//  Each piece-square, en passant square, castling mask, and side-to-move is
+//  assigned a random 64-bit key. The position hash is the XOR of all active
+//  keys. XOR is reversible, so MakeMove can update the hash in O(1) without
+//  rebuilding it from scratch.
 // =============================================================================
 
 public static class Zobrist
 {
     // =========================================================================
     //  SECTION 1 — Key tables
-    //
-    //  All tables are filled once in the static constructor and never modified
-    //  afterwards. `pieceKeys` is a flat 1D array indexed as
-    //  `(piece << 6) | square` — the same layout used in Evaluation.cs — to
-    //  avoid the extra multiply that C# 2D arrays require on every access.
     // =========================================================================
 
-    // One random key per (piece, square) pair. 12 pieces × 64 squares = 768.
+    // Indexed by: (piece << 6) | square
     public static readonly ulong[] pieceKeys = new ulong[12 << 6];
-
-    // One random key per en-passant target square. Only squares on ranks 3
-    // and 6 are ever used, but 64 entries keeps the indexing trivial.
     public static readonly ulong[] enpassantKeys = new ulong[64];
-
-    // One random key per castling-rights combination. Castling is encoded as
-    // a 4-bit mask (KQkq), giving 16 possible values.
     public static readonly ulong[] castleKeys = new ulong[16];
 
-    // XORed into the hash when it is White's turn. Black-to-move positions
-    // omit this key, so the same piece layout with opposite sides to move
-    // produces a different hash.
     public static ulong sideKey;
 
-    // The running hash for the current board position. Updated incrementally
-    // by MakeMove/UnmakeMove; rebuilt from scratch only when loading a FEN.
+    // Incremental hash for the current position
     public static ulong hashKey;
 
     // =========================================================================
-    //  SECTION 2 — Pseudo-random number generator (init-only)
-    //
-    //  xorshift32 by George Marsaglia. Period 2^32 − 1, passes most
-    //  statistical tests, and is more than adequate for generating hash keys
-    //  (we need ~900 random 64-bit values, not cryptographic security).
-    //  The four 16-bit slices are combined into a 64-bit key to ensure all
-    //  bit positions are well-populated.
+    //  SECTION 2 — Pseudo-random generator (xorshift32)
     // =========================================================================
 
     private static uint _rngState;
@@ -72,6 +47,7 @@ public static class Zobrist
 
     private static ulong NextU64()
     {
+        // Combine 4 x 16-bit slices to populate all 64 bits
         ulong n1 = NextU32() & 0xFFFF;
         ulong n2 = NextU32() & 0xFFFF;
         ulong n3 = NextU32() & 0xFFFF;
@@ -80,43 +56,49 @@ public static class Zobrist
     }
 
     // =========================================================================
-    //  SECTION 3 — Key initialization
-    //
-    //  Called once from the static constructor. Public so that test harnesses
-    //  can re-seed if needed, but normal play never calls it a second time.
+    //  SECTION 3 — Initialization
     // =========================================================================
 
     static Zobrist() => InitRandomKeys();
 
+    /// <summary>
+    /// Generates all Zobrist keys using a fixed seed for reproducibility.
+    /// </summary>
     public static void InitRandomKeys()
     {
+        // Step 1. Seed with Stockfish-compatible value
         _rngState = 1804289383;
 
+        // Step 2. Piece-square keys
         for (int piece = P; piece <= k; piece++)
             for (int sq = 0; sq < 64; sq++)
                 pieceKeys[(piece << 6) | sq] = NextU64();
 
+        // Step 3. En passant keys
         for (int sq = 0; sq < 64; sq++)
             enpassantKeys[sq] = NextU64();
 
+        // Step 4. Castling rights keys (16 combinations of KQkq)
         for (int i = 0; i < 16; i++)
             castleKeys[i] = NextU64();
 
+        // Step 5. Side-to-move key (XORed only when White to move)
         sideKey = NextU64();
     }
 
     // =========================================================================
-    //  SECTION 4 — Full hash rebuild
-    //
-    //  Walks every piece on the board and XORs its key into a fresh hash.
-    //  Used only when loading a new position (FEN/setboard). During search,
-    //  the hash is maintained incrementally — this function is never called.
+    //  SECTION 4 — Hash generation (full rebuild)
     // =========================================================================
 
+    /// <summary>
+    /// Rebuilds the hash from scratch by XORing all active position features.
+    /// Used only on FEN load; search uses incremental updates.
+    /// </summary>
     public static ulong GenerateHashKey()
     {
         ulong key = 0;
 
+        // Step 1. Piece-square contributions
         for (int piece = P; piece <= k; piece++)
         {
             ulong bb = bitboards[piece];
@@ -128,12 +110,15 @@ public static class Zobrist
             }
         }
 
+        // Step 2. Side to move
         if (side == White)
             key ^= sideKey;
 
+        // Step 3. En passant target square
         if (enPassant != (int)Square.noSquare)
             key ^= enpassantKeys[enPassant];
 
+        // Step 4. Castling rights
         key ^= castleKeys[castle];
 
         return key;
