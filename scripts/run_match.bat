@@ -1,51 +1,65 @@
 @echo off
 setlocal
 
-set "ANKAX_DEV=%~dp0bin\Release\net10.0\win-x64\publish\AnkaX.exe"
-set "ANKAX_RELEASE=%~dp0releases\AnkaX_1.0.5.exe"
-set "BOOK=%~dp0books\UHO_4060_v4.epd"
-set "PGN=%~dp0dev_vs_release.pgn"
+set "ANKAX_DEV=%~dp0..\bin\Release\net10.0\win-x64\publish\AnkaX.exe"
+set "ANKAX_RELEASE=%~dp0..\releases\AnkaX_1.0.7.exe"
+set "BOOK=%~dp0..\data\noob_3moves.epd"
+set "PGN=%~dp0..\dev_vs_release.pgn"
 
 :: Cutechess must be installed separately [EDIT if different]
 set "CUTECHESS=C:\Program Files (x86)\Cute Chess\cutechess-cli.exe"
 
+:: ============================================================
+::  SPRT MODE SELECTION (Uncomment ONLY ONE option below)
+:: ============================================================
+:: 1) Standard STC Gain Test (Testing a new feature for +Elo)
+:: set "SPRT_ARGS=-sprt elo0=0.0 elo1=2.0 alpha=0.05 beta=0.05"
+
+:: 2) Non-Regression Test (Testing code refactors/cleanups)
+set "SPRT_ARGS=-sprt elo0=-1.75 elo1=0.25 alpha=0.05 beta=0.05"
+
+:: 3) Disabled (Run fixed number of games without early stopping)
+:: set "SPRT_ARGS="
+:: ============================================================
+
 if not exist "%ANKAX_DEV%" (
-    echo [!] Dev build not found. Run: dotnet publish -c Release -r win-x64
+    echo [!] Dev build not found: %ANKAX_DEV%
+    echo     Run: dotnet publish -c Release -r win-x64
     pause & exit /b 1
 )
 if not exist "%ANKAX_RELEASE%" (
-    echo [!] Release build not found in releases\
+    echo [!] Release build not found: %ANKAX_RELEASE%
     pause & exit /b 1
 )
 if not exist "%CUTECHESS%" (
-    echo [!] Cutechess not found. Install from:
-    echo     https://github.com/cutechess/cutechess/releases
+    echo [!] Cutechess not found: %CUTECHESS%
+    echo     Install from: https://github.com/cutechess/cutechess/releases
     pause & exit /b 1
 )
 if not exist "%BOOK%" (
-    echo [!] Opening book not found in books\
+    echo [!] Opening book not found: %BOOK%
     pause & exit /b 1
 )
 
 echo ============================================
-echo   AnkaX Dev vs AnkaX Release (10000 games)
+echo   AnkaX Dev vs AnkaX Release (STC Test)
 echo ============================================
 echo.
 
 "%CUTECHESS%" ^
-    -engine name=AnkaX-Dev cmd="%ANKAX_DEV%" proto=uci ^
-    -engine name=AnkaX cmd="%ANKAX_RELEASE%" proto=uci ^
-    -each tc=3+0.05 ^
-    -openings file="%BOOK%" format=epd order=random plies=12 ^
-    -games 10000 -concurrency 4 -repeat -recover ^
+    -engine name=AnkaX-Dev cmd="%ANKAX_DEV%" proto=uci option.Threads=1 option.Hash=16 ^
+    -engine name=AnkaX cmd="%ANKAX_RELEASE%" proto=uci option.Threads=1 option.Hash=16 ^
+    -each tc=10+0.1 ^
+    -openings file="%BOOK%" format=epd order=random ^
+    -games 20000 -concurrency 4 -repeat -recover ^
     -resign movecount=3 score=400 ^
-    -draw movenumber=30 movecount=5 score=10 ^
-    -maxmoves 200 ^
+    -draw movenumber=34 movecount=8 score=8 ^
+    %SPRT_ARGS% ^
     -pgnout "%PGN%"
 
 echo.
 echo ============================================
 echo   Match complete.
-echo   PGN saved as dev_vs_release.pgn
+echo   PGN saved as dev_vs_release.pgn in repo root.
 echo ============================================
 pause
