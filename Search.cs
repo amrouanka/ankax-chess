@@ -14,21 +14,6 @@ using static System.Numerics.BitOperations;
 //      All scores are from the side-to-move's perspective (negamax).
 //      Mate scores encode distance: ±(MateScore − ply).
 //
-//  Search features:
-//      • Iterative deepening with aspiration windows
-//      • Principal Variation Search (PVS)
-//      • Null Move Pruning (NMP) with adaptive reduction
-//      • Late Move Reductions (LMR) with PV + counter-move adjustment
-//      • Reverse futility pruning (static eval well above beta)
-//      • Futility pruning (static eval well below alpha)
-//      • Check extensions
-//      • Internal Iterative Reduction (IIR) when no TT move
-//      • Counter-move history (best response to opponent's previous move)
-//      • Continuation history (score-based follow-up to opponent's move)
-//      • Mate distance pruning
-//      • Quiescence search with delta pruning
-//      • Fail-soft return values
-//
 //  Move ordering (highest → lowest priority):
 //
 //      Tier 1: TT move          10,000,000
