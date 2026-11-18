@@ -22,7 +22,7 @@ with all major chess GUIs.
 
 > Self-play results measured at 10+0.1 using
 > [cutechess-cli](https://github.com/cutechess/cutechess) with the
-> [UHO 4060 v4](https://www.sp-ohl.de/books/books.html) opening book
+> [noob_3moves](https://www.sp-ohl.de/books/books.html) opening book
 > (12 plies, randomized).
 
 ## Features
