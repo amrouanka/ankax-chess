@@ -20,6 +20,7 @@ with all major chess GUIs.
 - **v1.0.7:** +12 Elo over v1.0.6 (self-play, Counter-move history)
 - **v1.1.0:** +40 Elo over v1.0.7 (self-play, Evaluation & TT Fixes)
 - **v1.1.1:** +2 Elo over v1.1.0 (self-play, 32-bit move encoding & O(1) capture lookups)
+- **v1.1.2:** +9 Elo over v1.1.1 (self-play, on-demand Pick-Next movepicker)
 
 > Self-play results measured at 10+0.1 using
 > [cutechess-cli](https://github.com/cutechess/cutechess) with the
