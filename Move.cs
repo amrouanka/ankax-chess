@@ -56,8 +56,6 @@ public static class MoveEncoding
         $"{squareToCoordinates[GetMoveSource(move)]}" +
         $"{squareToCoordinates[GetMoveTarget(move)]}" +
         $"{promotedPieces[GetMovePromoted(move)]}";
-
-    public static void PrintMove(int move) => Console.WriteLine(GetMove(move));
 }
 
 // =============================================================================
