@@ -463,7 +463,7 @@ public static class Search
         if (depth >= 4 && ttMove == 0 && !inCheck)
             depth--;
 
-        // Step 9. Prepare futility flag, parent move context, and sorted move list
+        // Step 9. Prepare futility flag, parent move context, and scored move list
         bool canPrune = false;
         if (quietNode && depth <= FutilityMaxDepth)
             canPrune = staticEval + FutilityMarginPerDepth * depth <= alpha;
@@ -485,7 +485,7 @@ public static class Search
         int killerIndex = currentPly << KillerShift;
         int pvMove = currentPly == 0 ? pvTable[0] : 0;
 
-        SortMoves(
+        ScoreMoves(
             ref moveList,
             ttMove, pvMove,
             killerMoves[killerIndex], killerMoves[killerIndex + 1],
@@ -511,6 +511,7 @@ public static class Search
 
         for (int i = 0; i < moveCount; i++)
         {
+            PickNextMove(ref moveList, i);
             int move = moves[i];
             int promoted = GetMovePromoted(move);
 
@@ -712,7 +713,7 @@ public static class Search
 
         int killerIndex = currentPly << KillerShift;
 
-        SortMoves(
+        ScoreMoves(
             ref moveList,
             0, 0,
             killerMoves[killerIndex], killerMoves[killerIndex + 1],
@@ -726,6 +727,7 @@ public static class Search
         // Step 4. Iterate through tactical moves (or check evasions)
         for (int i = 0; i < moveCount; i++)
         {
+            PickNextMove(ref moveList, i);
             int move = moves[i];
 
             // Delta pruning: skip captures whose material gain + margin still cannot reach alpha
@@ -774,51 +776,52 @@ public static class Search
     // =========================================================================
 
     /// <summary>
-    /// Scores all moves in <paramref name="moveList"/> and sorts them descending
-    /// using insertion sort.
+    /// Scores all moves in <paramref name="moveList"/> upfront without sorting them.
+    /// Moves will be selected on-demand during search via <see cref="PickNextMove"/>.
     /// </summary>
-    private static void SortMoves(
+    private static void ScoreMoves(
         ref MoveList moveList,
         int ttMove, int pvMove,
         int killer1, int killer2,
         int counterMove, int prevContRowBase)
     {
         int count = moveList.count;
-        if (count < 2)
-        {
-            if (count == 1)
-                moveList.scores[0] = ScoreMove(
-                    moveList.moves[0], ttMove, pvMove, killer1, killer2,
-                    counterMove, prevContRowBase);
-            return;
-        }
-
-        Span<int> moves = moveList.moves.AsSpan(0, count);
-        Span<int> scores = moveList.scores.AsSpan(0, count);
+        int[] moves = moveList.moves;
+        int[] scores = moveList.scores;
 
         for (int i = 0; i < count; i++)
+        {
             scores[i] = ScoreMove(moves[i], ttMove, pvMove, killer1, killer2,
                                   counterMove, prevContRowBase);
+        }
+    }
 
-        for (int i = 1; i < count; i++)
+    /// <summary>
+    /// Finds the highest-scoring move from <paramref name="currentIndex"/> to the end of the list
+    /// and swaps it into <paramref name="currentIndex"/>.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void PickNextMove(ref MoveList moveList, int currentIndex)
+    {
+        int bestIndex = currentIndex;
+        int bestScore = moveList.scores[currentIndex];
+        int count = moveList.count;
+
+        for (int i = currentIndex + 1; i < count; i++)
         {
-            int score = scores[i];
-            if (score <= scores[i - 1])
-                continue;
-
-            int move = moves[i];
-            int j = i - 1;
-
-            do
+            if (moveList.scores[i] > bestScore)
             {
-                moves[j + 1] = moves[j];
-                scores[j + 1] = scores[j];
-                j--;
+                bestScore = moveList.scores[i];
+                bestIndex = i;
             }
-            while (j >= 0 && scores[j] < score);
+        }
 
-            moves[j + 1] = move;
-            scores[j + 1] = score;
+        if (bestIndex != currentIndex)
+        {
+            (moveList.moves[currentIndex], moveList.moves[bestIndex]) =
+                (moveList.moves[bestIndex], moveList.moves[currentIndex]);
+            (moveList.scores[currentIndex], moveList.scores[bestIndex]) =
+                (moveList.scores[bestIndex], moveList.scores[currentIndex]);
         }
     }
 
