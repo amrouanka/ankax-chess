@@ -18,7 +18,7 @@ public static class Uci
     //  SECTION 1 — Engine Metadata & Configuration
     // =========================================================================
 
-    private const string EngineName = "AnkaX v1.1.1";
+    private const string EngineName = "AnkaX v1.1.2";
     private const string EngineAuthor = "Amrou Louai Anka";
     private const int MaxSearchDepth = 64;
 
