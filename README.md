@@ -19,6 +19,7 @@ with all major chess GUIs.
 - **v1.0.6:** +65 to +93 Elo over v1.0.5 (self-play, time management overhaul; TC-dependent)
 - **v1.0.7:** +12 Elo over v1.0.6 (self-play, Counter-move history)
 - **v1.1.0:** +40 Elo over v1.0.7 (self-play, Evaluation & TT Fixes)
+- **v1.1.1:** +2 Elo over v1.1.0 (self-play, 32-bit move encoding & O(1) capture lookups)
 
 > Self-play results measured at 10+0.1 using
 > [cutechess-cli](https://github.com/cutechess/cutechess) with the
@@ -75,7 +76,7 @@ The engine starts in UCI mode and waits for commands from standard input.
 
     > AnkaX.exe
     uci
-    id name AnkaX v1.1.0
+    id name AnkaX v1.1.1
     id author Amrou Louai Anka
     uciok
     isready
