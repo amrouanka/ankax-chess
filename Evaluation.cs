@@ -103,6 +103,9 @@ public static class Evaluation
     // Outposts are classical strong squares (think c5/d5/e5/f5 for White).
     private const int KnightOutpostMg = 46;
 
+    // Tempo bonus: static advantage awarded to the side to move
+    private const int TempoBonus = 8;
+
     #endregion
 
     // =========================================================================
@@ -745,7 +748,7 @@ public static class Evaluation
         int score = (mg * mgPhase + eg * egPhase) / TotalPhase;
 
         // Flip so the score is always from the moving side's perspective.
-        return side == White ? score : -score;
+        return (side == White ? score : -score) + TempoBonus;
     }
 
     // =========================================================================
