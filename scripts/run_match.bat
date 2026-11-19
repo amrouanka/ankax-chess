@@ -2,7 +2,7 @@
 setlocal
 
 set "ANKAX_DEV=%~dp0..\bin\Release\net10.0\AnkaX.exe"
-set "ANKAX_RELEASE=%~dp0..\releases\AnkaX_1.0.7.exe"
+set "ANKAX_RELEASE=%~dp0..\releases\AnkaX_1.1.2.exe"
 set "BOOK=%~dp0..\data\noob_3moves.epd"
 set "PGN=%~dp0..\dev_vs_release.pgn"
 

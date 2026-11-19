@@ -101,30 +101,33 @@ bestmove g1f3
 
 ## Testing & Self-Play
 
-This repository includes scripts for automated self-play testing using
+This repository includes scripts and workflow configurations for automated self-play testing using
 [cutechess-cli](https://github.com/cutechess/cutechess).
 
 ### Prerequisites
 
 1. Install [cutechess-cli](https://github.com/cutechess/cutechess/releases)
-   and update the `CUTECHESS` path in `scripts/run_match.bat` if needed.
-2. The opening book `noob_3moves.epd` (7,422 positions after 3 moves per side / 6 plies) is located in `data/`.
+   and verify the binary path (`C:\Program Files (x86)\Cute Chess\cutechess-cli.exe` in `scripts/run_match.bat`).
+2. The opening book `noob_3moves.epd` (7,422 positions, 6 plies) is located in `data/`.
 
 ### Running a Match Locally
 
 ```cmd
-scripts/run_match.bat
+scripts\run_match.bat
 ```
 
-This runs 10,000 games between the current dev build and the release build
-in `releases/AnkaX.exe`, using 3+0.05 time control with `data/noob_3moves.epd`.
-Results are saved to `dev_vs_release.pgn`.
+This runs up to 20,000 games between `bin\Release\net10.0\AnkaX.exe` (Dev) and `releases\AnkaX_1.1.2.exe` (Release) at `10+0.1` time control with 4 parallel threads (`-concurrency 4`).
+
+By default, the script runs in **Sequential Probability Ratio Test (SPRT)** non-regression mode (`elo0=-1.75 elo1=0.25 alpha=0.05 beta=0.05`) to allow early stopping when statistically significant results are reached. Game output is saved to `dev_vs_release.pgn`.
 
 ### Running a Match via GitHub Actions
 
-Trigger the **Engine Test** workflow from the Actions tab (or VSCode).
-It runs 20 parallel shards of 250 games each (5,000 total) at 10+0.1 on
-`ubuntu-24.04` runners, building both engines from source.
+Trigger the **Engine Test** workflow from the Actions tab.
+
+- **Baseline tag:** `v1.1.2` (default)
+- **Time control:** `10+0.1` (default)
+- **Shards:** 20 parallel runner shards (`ubuntu-24.04`)
+- **Games per shard:** `700` (14,000 total games)
 
 After the run completes, download the PGN artifacts and combine them:
 
@@ -135,11 +138,10 @@ Get-ChildItem -Recurse -Filter "result_*.pgn" | Get-Content | Set-Content dev_vs
 ### Checking Results
 
 ```cmd
-scripts/check_los.bat
+scripts\check_los.bat
 ```
 
-Parses the PGN and displays Elo difference, error margin, and Likelihood of
-Superiority (LOS).
+Parses the generated PGN file and displays total wins/losses/draws, Elo difference, margin of error, and Likelihood of Superiority (LOS).
 
 ## Project Structure
 
@@ -158,10 +160,10 @@ Superiority (LOS).
 | `TimeManagement.cs`    | Search timing and clock management                        |
 | `Enums.cs`             | Piece, square, castling, and flag constants               |
 | `AnkaX.csproj`         | .NET 10 project file                                      |
-| `.github/workflows/`   | GitHub Actions CI for automated self-play testing         |
+| `.github/workflows/`   | GitHub Actions CI workflow (`test.yml`)                   |
 | `data/`                | Opening book (`noob_3moves.epd`) and test suites          |
 | `releases/`            | Published executables for version comparison              |
-| `scripts/run_match.bat`| Automated self-play match script (cutechess-cli)          |
+| `scripts/run_match.bat`| Automated local self-play match script (cutechess-cli)    |
 | `scripts/check_los.bat`| PGN result analyzer (Elo, LOS)                            |
 | `SEARCH.md`            | Technical documentation of the search algorithm           |
 
@@ -172,7 +174,7 @@ AnkaX uses techniques common in strong chess engines:
 - Bitboards for fast board operations
 - Flat-array storage for hot-path performance (no multi-dimensional arrays on the search path)
 - Pre-allocated move lists to eliminate GC pressure during search
-- Aggressive move ordering with on-demand move selection
+- Aggressive move ordering with on-demand move selection (`ScoreMoves` + `PickNextMove`)
 - Multiple pruning heuristics for reduced search cost
 - Transposition tables for repeated positions
 - Hardware-accelerated bit counting (`POPCNT`)
