@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using static Board;
 
 // =============================================================================
@@ -7,15 +8,16 @@ using static Board;
 //  board state snapshot for copy/takeback.
 //
 //  Move Bit Layout (32-bit int):
-//      0–5   Source square     (6 bits, 0–63)
-//      6–11  Target square     (6 bits, 0–63)
-//      12–15 Piece             (4 bits, 0–11)
-//      16–19 Promoted piece    (4 bits, 0–11; 0 = none)
-//      20    Capture flag      (1 bit)
-//      21    Double push flag  (1 bit)
-//      22    En passant flag   (1 bit)
-//      23    Castling flag     (1 bit)
-//      24–31 Unused
+//      0–5   Source square      (6 bits, 0–63)
+//      6–11  Target square      (6 bits, 0–63)
+//      12–15 Piece              (4 bits, 0–11)
+//      16–19 Promoted piece     (4 bits, 0–11; 0 = none)
+//      20–23 Captured piece     (4 bits, 0–11; 0 = none)
+//      24    Capture flag       (1 bit)
+//      25    Double push flag   (1 bit)
+//      26    En passant flag    (1 bit)
+//      27    Castling flag      (1 bit)
+//      28–31 Unused             (4 bits)
 // =============================================================================
 
 // =============================================================================
@@ -27,27 +29,47 @@ public static class MoveEncoding
     /// <summary>
     /// Packs all move attributes into a single 32-bit integer.
     /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static int EncodeMove(int source, int target, int piece, int promoted,
-        int capture, int @double, int enpassant, int castling)
+        int captured, int capture, int @double, int enpassant, int castling)
     {
         return source
              | (target << 6)
              | (piece << 12)
              | (promoted << 16)
-             | (capture << 20)
-             | (@double << 21)
-             | (enpassant << 22)
-             | (castling << 23);
+             | (captured << 20)
+             | (capture << 24)
+             | (@double << 25)
+             | (enpassant << 26)
+             | (castling << 27);
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static int GetMoveSource(int move) => move & 0x3F;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static int GetMoveTarget(int move) => (move >> 6) & 0x3F;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static int GetMovePiece(int move) => (move >> 12) & 0xF;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static int GetMovePromoted(int move) => (move >> 16) & 0xF;
-    public static int GetMoveCapture(int move) => move & 0x100000;
-    public static int GetMoveDouble(int move) => move & 0x200000;
-    public static int GetMoveEnpassant(int move) => move & 0x400000;
-    public static int GetMoveCastling(int move) => move & 0x800000;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static int GetMoveCaptured(int move) => (move >> 20) & 0xF;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static int GetMoveCapture(int move) => move & 0x1000000;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static int GetMoveDouble(int move) => move & 0x2000000;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static int GetMoveEnpassant(int move) => move & 0x4000000;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static int GetMoveCastling(int move) => move & 0x8000000;
 
     /// <summary>
     /// Converts an encoded move to UCI long algebraic notation (e.g. "e2e4", "e7e8q").

@@ -1,10 +1,11 @@
-using static Board;
+using System.Runtime.CompilerServices;
+using static System.Numerics.BitOperations;
+using static BitboardOperations;
 using static CastlingRights;
 using static MoveEncoding;
 using static PieceAttacks;
 using static Square;
-using static BitboardOperations;
-using static System.Numerics.BitOperations;
+using static Board;
 
 // =============================================================================
 // AnkaX Chess Engine - Move Generation & Board State Mutation
@@ -52,6 +53,34 @@ public static class MoveGenerator
     //  SECTION 2 — Move Generation
     // =========================================================================
 
+    // Resolves which enemy piece occupies a known capture target square.
+    // Checks enemy pawn first (most common capture), falling through to king.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static int GetCapturedPiece(int target)
+    {
+        ulong mask = 1UL << target;
+        ulong[] bb = bitboards;
+
+        if (side == White)
+        {
+            if ((bb[p] & mask) != 0) return p;
+            if ((bb[n] & mask) != 0) return n;
+            if ((bb[b] & mask) != 0) return b;
+            if ((bb[r] & mask) != 0) return r;
+            if ((bb[q] & mask) != 0) return q;
+            return k;
+        }
+        else
+        {
+            if ((bb[P] & mask) != 0) return P;
+            if ((bb[N] & mask) != 0) return N;
+            if ((bb[B] & mask) != 0) return B;
+            if ((bb[R] & mask) != 0) return R;
+            if ((bb[Q] & mask) != 0) return Q;
+            return K;
+        }
+    }
+
     // Generates all pseudo-legal moves for the current board state.
     // If `capturesOnly` is true, non-captures and quiet pawn pushes are omitted
     // (used by Quiescence Search).
@@ -76,6 +105,7 @@ public static class MoveGenerator
         int rookPiece = isWhite ? R : r;
         int queenPiece = isWhite ? Q : q;
         int kingPiece = isWhite ? K : k;
+        int enemyPawn = isWhite ? p : P;
 
         // ---------------------------------------------------------------------
         //  Step 2: Pawn move generation
@@ -106,20 +136,20 @@ public static class MoveGenerator
                     // Promotion check: source is on the 7th (White) or 2nd (Black) rank
                     if ((uint)(src - promoFirst) <= 7)
                     {
-                        AddMove(ref moveList, EncodeMove(src, target, pawnPiece, qPromo, 0, 0, 0, 0));
-                        AddMove(ref moveList, EncodeMove(src, target, pawnPiece, rPromo, 0, 0, 0, 0));
-                        AddMove(ref moveList, EncodeMove(src, target, pawnPiece, bPromo, 0, 0, 0, 0));
-                        AddMove(ref moveList, EncodeMove(src, target, pawnPiece, nPromo, 0, 0, 0, 0));
+                        AddMove(ref moveList, EncodeMove(src, target, pawnPiece, qPromo, 0, 0, 0, 0, 0));
+                        AddMove(ref moveList, EncodeMove(src, target, pawnPiece, rPromo, 0, 0, 0, 0, 0));
+                        AddMove(ref moveList, EncodeMove(src, target, pawnPiece, bPromo, 0, 0, 0, 0, 0));
+                        AddMove(ref moveList, EncodeMove(src, target, pawnPiece, nPromo, 0, 0, 0, 0, 0));
                     }
                     else
                     {
-                        AddMove(ref moveList, EncodeMove(src, target, pawnPiece, 0, 0, 0, 0, 0));
+                        AddMove(ref moveList, EncodeMove(src, target, pawnPiece, 0, 0, 0, 0, 0, 0));
 
                         // Double push: source is on 2nd (White) / 7th (Black) rank & path is clear
                         if ((uint)(src - doubleFirst) <= 7 &&
                             (bothOcc & (1UL << (target + pawnDir))) == 0)
                         {
-                            AddMove(ref moveList, EncodeMove(src, target + pawnDir, pawnPiece, 0, 0, 1, 0, 0));
+                            AddMove(ref moveList, EncodeMove(src, target + pawnDir, pawnPiece, 0, 0, 0, 1, 0, 0));
                         }
                     }
                 }
@@ -131,23 +161,24 @@ public static class MoveGenerator
             {
                 int target = TrailingZeroCount(attacks);
                 attacks &= attacks - 1;
+                int captured = GetCapturedPiece(target);
 
                 if ((uint)(src - promoFirst) <= 7)
                 {
-                    AddMove(ref moveList, EncodeMove(src, target, pawnPiece, qPromo, 1, 0, 0, 0));
-                    AddMove(ref moveList, EncodeMove(src, target, pawnPiece, rPromo, 1, 0, 0, 0));
-                    AddMove(ref moveList, EncodeMove(src, target, pawnPiece, bPromo, 1, 0, 0, 0));
-                    AddMove(ref moveList, EncodeMove(src, target, pawnPiece, nPromo, 1, 0, 0, 0));
+                    AddMove(ref moveList, EncodeMove(src, target, pawnPiece, qPromo, captured, 1, 0, 0, 0));
+                    AddMove(ref moveList, EncodeMove(src, target, pawnPiece, rPromo, captured, 1, 0, 0, 0));
+                    AddMove(ref moveList, EncodeMove(src, target, pawnPiece, bPromo, captured, 1, 0, 0, 0));
+                    AddMove(ref moveList, EncodeMove(src, target, pawnPiece, nPromo, captured, 1, 0, 0, 0));
                 }
                 else
                 {
-                    AddMove(ref moveList, EncodeMove(src, target, pawnPiece, 0, 1, 0, 0, 0));
+                    AddMove(ref moveList, EncodeMove(src, target, pawnPiece, 0, captured, 1, 0, 0, 0));
                 }
             }
 
             // --- En Passant Captures ---
             if (epTarget != 0 && (pawnAttacks[side, src] & epTarget) != 0)
-                AddMove(ref moveList, EncodeMove(src, enPassant, pawnPiece, 0, 1, 0, 1, 0));
+                AddMove(ref moveList, EncodeMove(src, enPassant, pawnPiece, 0, enemyPawn, 1, 0, 1, 0));
         }
 
         // ---------------------------------------------------------------------
@@ -161,8 +192,10 @@ public static class MoveGenerator
             {
                 int target = TrailingZeroCount(attacks);
                 attacks &= attacks - 1;
-                int cap = GetBit(enemyOcc, target) ? 1 : 0;
-                AddMove(ref moveList, EncodeMove(src, target, knightPiece, 0, cap, 0, 0, 0));
+                if (GetBit(enemyOcc, target))
+                    AddMove(ref moveList, EncodeMove(src, target, knightPiece, 0, GetCapturedPiece(target), 1, 0, 0, 0));
+                else
+                    AddMove(ref moveList, EncodeMove(src, target, knightPiece, 0, 0, 0, 0, 0, 0));
             }
         }
 
@@ -174,8 +207,10 @@ public static class MoveGenerator
             {
                 int target = TrailingZeroCount(attacks);
                 attacks &= attacks - 1;
-                int cap = GetBit(enemyOcc, target) ? 1 : 0;
-                AddMove(ref moveList, EncodeMove(src, target, bishopPiece, 0, cap, 0, 0, 0));
+                if (GetBit(enemyOcc, target))
+                    AddMove(ref moveList, EncodeMove(src, target, bishopPiece, 0, GetCapturedPiece(target), 1, 0, 0, 0));
+                else
+                    AddMove(ref moveList, EncodeMove(src, target, bishopPiece, 0, 0, 0, 0, 0, 0));
             }
         }
 
@@ -187,8 +222,10 @@ public static class MoveGenerator
             {
                 int target = TrailingZeroCount(attacks);
                 attacks &= attacks - 1;
-                int cap = GetBit(enemyOcc, target) ? 1 : 0;
-                AddMove(ref moveList, EncodeMove(src, target, rookPiece, 0, cap, 0, 0, 0));
+                if (GetBit(enemyOcc, target))
+                    AddMove(ref moveList, EncodeMove(src, target, rookPiece, 0, GetCapturedPiece(target), 1, 0, 0, 0));
+                else
+                    AddMove(ref moveList, EncodeMove(src, target, rookPiece, 0, 0, 0, 0, 0, 0));
             }
         }
 
@@ -200,8 +237,10 @@ public static class MoveGenerator
             {
                 int target = TrailingZeroCount(attacks);
                 attacks &= attacks - 1;
-                int cap = GetBit(enemyOcc, target) ? 1 : 0;
-                AddMove(ref moveList, EncodeMove(src, target, queenPiece, 0, cap, 0, 0, 0));
+                if (GetBit(enemyOcc, target))
+                    AddMove(ref moveList, EncodeMove(src, target, queenPiece, 0, GetCapturedPiece(target), 1, 0, 0, 0));
+                else
+                    AddMove(ref moveList, EncodeMove(src, target, queenPiece, 0, 0, 0, 0, 0, 0));
             }
         }
 
@@ -213,8 +252,10 @@ public static class MoveGenerator
             {
                 int target = TrailingZeroCount(attacks);
                 attacks &= attacks - 1;
-                int cap = GetBit(enemyOcc, target) ? 1 : 0;
-                AddMove(ref moveList, EncodeMove(src, target, kingPiece, 0, cap, 0, 0, 0));
+                if (GetBit(enemyOcc, target))
+                    AddMove(ref moveList, EncodeMove(src, target, kingPiece, 0, GetCapturedPiece(target), 1, 0, 0, 0));
+                else
+                    AddMove(ref moveList, EncodeMove(src, target, kingPiece, 0, 0, 0, 0, 0, 0));
             }
         }
 
@@ -233,7 +274,7 @@ public static class MoveGenerator
                     !IsSquareAttacked((int)e1, enemySide) &&
                     !IsSquareAttacked((int)f1, enemySide))
                 {
-                    AddMove(ref moveList, EncodeMove((int)e1, (int)g1, K, 0, 0, 0, 0, 1));
+                    AddMove(ref moveList, EncodeMove((int)e1, (int)g1, K, 0, 0, 0, 0, 0, 1));
                 }
 
                 // White Queenside Castling (e1 -> c1)
@@ -242,7 +283,7 @@ public static class MoveGenerator
                     !IsSquareAttacked((int)e1, enemySide) &&
                     !IsSquareAttacked((int)d1, enemySide))
                 {
-                    AddMove(ref moveList, EncodeMove((int)e1, (int)c1, K, 0, 0, 0, 0, 1));
+                    AddMove(ref moveList, EncodeMove((int)e1, (int)c1, K, 0, 0, 0, 0, 0, 1));
                 }
             }
             else
@@ -253,7 +294,7 @@ public static class MoveGenerator
                     !IsSquareAttacked((int)e8, enemySide) &&
                     !IsSquareAttacked((int)f8, enemySide))
                 {
-                    AddMove(ref moveList, EncodeMove((int)e8, (int)g8, k, 0, 0, 0, 0, 1));
+                    AddMove(ref moveList, EncodeMove((int)e8, (int)g8, k, 0, 0, 0, 0, 0, 1));
                 }
 
                 // Black Queenside Castling (e8 -> c8)
@@ -262,7 +303,7 @@ public static class MoveGenerator
                     !IsSquareAttacked((int)e8, enemySide) &&
                     !IsSquareAttacked((int)d8, enemySide))
                 {
-                    AddMove(ref moveList, EncodeMove((int)e8, (int)c8, k, 0, 0, 0, 0, 1));
+                    AddMove(ref moveList, EncodeMove((int)e8, (int)c8, k, 0, 0, 0, 0, 0, 1));
                 }
             }
         }
@@ -306,22 +347,13 @@ public static class MoveGenerator
         Zobrist.hashKey ^= Zobrist.pieceKeys[(piece << 6) | targetSquare];
 
         // ---------------------------------------------------------------------
-        //  Step 3: Remove captured piece (Standard capture)
+        //  Step 3: Remove captured piece (Standard capture, O(1) via encoding)
         // ---------------------------------------------------------------------
         if (capture != 0 && GetMoveEnpassant(move) == 0)
         {
-            int startPiece = isWhite ? p : P;
-            int endPiece = isWhite ? k : K;
-
-            for (int bbPiece = startPiece; bbPiece <= endPiece; bbPiece++)
-            {
-                if (GetBit(bitboards[bbPiece], targetSquare))
-                {
-                    bitboards[bbPiece] &= ~(1UL << targetSquare);
-                    Zobrist.hashKey ^= Zobrist.pieceKeys[(bbPiece << 6) | targetSquare];
-                    break;
-                }
-            }
+            int capturedPiece = GetMoveCaptured(move);
+            bitboards[capturedPiece] &= ~(1UL << targetSquare);
+            Zobrist.hashKey ^= Zobrist.pieceKeys[(capturedPiece << 6) | targetSquare];
         }
 
         // ---------------------------------------------------------------------

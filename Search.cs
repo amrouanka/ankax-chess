@@ -732,7 +732,7 @@ public static class Search
             if (!inCheck)
             {
                 int promoted = GetMovePromoted(move);
-                int capturedValue = GetPieceValue(GetPieceAtSquare(GetMoveTarget(move)));
+                int capturedValue = GetMoveCapture(move) != 0 ? GetPieceValue(GetMoveCaptured(move)) : 0;
                 int promotionDelta = promoted != 0 ? GetPieceValue(promoted) - 89 : 0;
 
                 if (deltaBase + capturedValue + promotionDelta < alpha)
@@ -834,12 +834,10 @@ public static class Search
         if (promoted == Q || promoted == q) return 9_000_000;
         if (move == pvMove) return 8_000_000;
 
-        int target = GetMoveTarget(move);
-
         if (GetMoveCapture(move) != 0)
         {
             int piece = GetMovePiece(move);
-            int victim = GetPieceAtSquare(target);
+            int victim = GetMoveCaptured(move);
             return mvvLvaTable[(piece << PieceShift) | victim] + 1_000_000;
         }
 
@@ -849,6 +847,7 @@ public static class Search
         if (GetMoveCastling(move) != 0) return 600_000;
         if (promoted != 0) return 500_000;
 
+        int target = GetMoveTarget(move);
         int currIndex = (GetMovePiece(move) << HistoryShift) | target;
         int history = historyMoves[currIndex];
         if (prevContRowBase >= 0)
@@ -918,28 +917,6 @@ public static class Search
             ? TrailingZeroCount(bitboards[K])
             : TrailingZeroCount(bitboards[k]);
         return PieceAttacks.IsSquareAttacked(kSq, sideToMove ^ 1);
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static int GetPieceAtSquare(int square)
-    {
-        ulong mask = 1UL << square;
-        ulong[] bb = bitboards;
-
-        if ((bb[P] & mask) != 0) return P;
-        if ((bb[p] & mask) != 0) return p;
-        if ((bb[N] & mask) != 0) return N;
-        if ((bb[n] & mask) != 0) return n;
-        if ((bb[B] & mask) != 0) return B;
-        if ((bb[b] & mask) != 0) return b;
-        if ((bb[R] & mask) != 0) return R;
-        if ((bb[r] & mask) != 0) return r;
-        if ((bb[Q] & mask) != 0) return Q;
-        if ((bb[q] & mask) != 0) return q;
-        if ((bb[K] & mask) != 0) return K;
-        if ((bb[k] & mask) != 0) return k;
-
-        return 0;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
