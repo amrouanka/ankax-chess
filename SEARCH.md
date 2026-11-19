@@ -44,8 +44,9 @@ SearchPosition(depth)
 │   │   ├── Null move pruning
 │   │   ├── Internal Iterative Reduction
 │   │   ├── Futility pruning setup
-│   │   ├── Move generation + ordering
+│   │   ├── Move generation + upfront scoring (ScoreMoves)
 │   │   └── for each move:
+│   │       ├── PickNextMove (on-demand selection pick)
 │   │       ├── MakeMove
 │   │       ├── Recursive AlphaBeta (PVS logic)
 │   │       ├── TakeBack
@@ -386,18 +387,21 @@ a cutoff at the last move prunes nothing.
 | **Tier 6** | Counter-move | 700,000 |
 | **Tier 7** | Castling / Underpromotions | 600,000 / 500,000 |
 | **Tier 8** | History moves (gravity-bounded) | -16,384 .. +16,384 |
-Tier 1: TT move 10,000,000
-Tier 2: Q-promotion 9,000,000
-Tier 3: PV move 8,000,000
-Tier 4: Captures 1,000,100 .. 1,000,605 (MVV-LVA)
-─── gap: 83,716 ───
-Tier 5: Killer 1 900,000
-Killer 2 800,000
-Tier 6: Counter-move 700,000
-Tier 7: Castling 600,000
-Underpromotion 500,000
-─── gap: 483,616 ───
-Tier 8: History -16,384 .. +16,384 (gravity-bounded)
+
+```
+Tier 1: TT move          10,000,000
+Tier 2: Q-promotion       9,000,000
+Tier 3: PV move           8,000,000
+Tier 4: Captures          1,000,100 .. 1,000,605   (MVV-LVA)
+        ─── gap: 83,716 ───
+Tier 5: Killer 1            900,000
+        Killer 2            800,000
+Tier 6: Counter-move        700,000
+Tier 7: Castling            600,000
+        Underpromotion      500,000
+        ─── gap: 483,616 ───
+Tier 8: History            -16,384 .. +16,384      (gravity-bounded)
+```
 
 ### MVV-LVA (Most Valuable Victim / Least Valuable Attacker)
 
@@ -410,16 +414,13 @@ Rationale: winning big material is almost always correct, and risking little
 material to win big is low-risk. The reverse (queen takes pawn defended by
 anything) is usually bad.
 
-### Sort algorithm
+### On-Demand Selection Movepicker
 
-AnkaX uses insertion sort. This seems slow (O(n²)) but it's optimal here:
+AnkaX uses an on-demand selection movepicker (`PickNextMove`) instead of sorting all moves upfront:
 
-- Move lists are small (usually 20–60 moves)
-- Already partially ordered (TT/captures cluster at the front)
-- No allocations, excellent cache behavior
-- Early-exit when an element is already in order
-
-Quicksort would be slower due to its overhead on small arrays.
+- `ScoreMoves` scores all generated moves in $O(N)$ time upfront.
+- In the move loop, `PickNextMove` searches from `currentIndex` to `count`, finds the highest-scoring move, and swaps it into position.
+- **Why it's faster**: Over 70% of search nodes experience an immediate beta cutoff on the very first move. On-demand selection completely eliminates CPU sorting overhead on non-searched moves.
 
 ---
 
@@ -575,7 +576,7 @@ Span<int> moves = moveList.moves.AsSpan(0, count);
 ```
 
 **Why?** `Span<T>` tells the JIT the bounds are fixed, enabling bounds-check
-elimination inside the sort loop.
+elimination inside iteration loops.
 
 ### 13.4 StringBuilder reuse for UCI output
 
@@ -614,9 +615,8 @@ int childRowBase = nextPly << PvRowShift;
 for (int i = 0; i < moveCount; i++) { ... }
 ```
 
-**Why?** These values don't change during the move loop. The JIT may or
-may not hoist them automatically; computing them explicitly guarantees
-each is computed once, not 40 times.
+**Why?** These values don't change during the move loop. Computing them explicitly
+guarantees each is computed once, not 40 times.
 
 ### 13.7 Branchless boolean operators
 
@@ -630,23 +630,17 @@ Note the single `&` instead of `&&`.
 sides, no branch. For cheap operations, the single-branch version is faster
 because the branch predictor can't mispredict what doesn't exist.
 
-**Caveat**: only use `&` when both sides are **cheap and safe** to evaluate
-(no null derefs, no side effects).
-
 ### 13.8 Pre-allocated move list pool
 
 ```csharp
 private static readonly MoveList[] moveLists = new MoveList[MaxPly + 2];
 ```
 
-**Why?** `new MoveList()` would allocate during every node visit (hundreds
-of millions of times per game). Pre-allocating one per ply means:
+**Why?** Pre-allocating one move list per ply eliminates GC pressure and heap allocation overhead during tree search.
 
-- Zero GC pressure during search
-- Memory reused and cache-warm
-- No initialization cost per visit
+### 13.9 Compact 32-bit move encoding with embedded captured piece
 
-This is the single largest allocation win in the engine.
+Move attributes (source, target, piece, promoted, captured, and flags) are packed into a single 32-bit primitive integer. Storing the `captured` piece directly in bits `20–23` enables $O(1)$ piece removal in `MakeMove` and $O(1)$ MVV-LVA scoring without secondary bitboard array lookups.
 
 ---
 
