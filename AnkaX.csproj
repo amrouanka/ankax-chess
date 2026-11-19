@@ -10,6 +10,8 @@
     <InvariantGlobalization>true</InvariantGlobalization>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <AssemblyName>AnkaX</AssemblyName>
+    <Copyright>Copyright (C) 2026 Amrou Louai Anka</Copyright>
+    <PackageLicenseExpression>GPL-3.0-or-later</PackageLicenseExpression>
   </PropertyGroup>
 
 </Project>

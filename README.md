@@ -24,8 +24,8 @@ with all major chess GUIs.
 
 > Self-play results measured at 10+0.1 using
 > [cutechess-cli](https://github.com/cutechess/cutechess) with the
-> [noob_3moves](https://www.sp-ohl.de/books/books.html) opening book
-> (6 plies / 3 full moves per side, 7,422 positions, randomized).
+> [noob_3moves](https://github.com/official-stockfish/books) opening book
+> (6 plies / 3 full moves per side, randomized order).
 
 ## Features
 
@@ -108,7 +108,7 @@ This repository includes scripts and workflow configurations for automated self-
 
 1. Install [cutechess-cli](https://github.com/cutechess/cutechess/releases)
    and verify the binary path (`C:\Program Files (x86)\Cute Chess\cutechess-cli.exe` in `scripts/run_match.bat`).
-2. The opening book `noob_3moves.epd` (7,422 positions, 6 plies) is located in `data/`.
+2. The opening book `noob_3moves.epd` (6 plies, 3 full moves per side) is located in `data/`.
 
 ### Running a Match Locally
 
@@ -116,9 +116,9 @@ This repository includes scripts and workflow configurations for automated self-
 scripts\run_match.bat
 ```
 
-This runs up to 20,000 games between `bin\Release\net10.0\AnkaX.exe` (Dev) and `releases\AnkaX_1.1.2.exe` (Release) at `10+0.1` time control with 4 parallel threads (`-concurrency 4`).
+This runs up to 20,000 games between `bin\Release\net10.0\AnkaX.exe` (Dev) and `releases\AnkaX_1.1.2.exe` (Release) at `10+0.1` time control with 4 parallel games (`-concurrency 4`).
 
-By default, the script runs in **Sequential Probability Ratio Test (SPRT)** non-regression mode (`elo0=-1.75 elo1=0.25 alpha=0.05 beta=0.05`) to allow early stopping when statistically significant results are reached. Game output is saved to `dev_vs_release.pgn`.
+By default, the script runs in **Sequential Probability Ratio Test (SPRT)** non-regression mode (`elo0=-1.75 elo1=0.25 alpha=0.05 beta=0.05`), which stops the match early once a statistically significant result is reached. Other modes (gain test, fixed game count) can be selected at the top of the script. Game output is saved to `dev_vs_release.pgn`.
 
 ### Running a Match via GitHub Actions
 
@@ -166,6 +166,7 @@ Parses the generated PGN file and displays total wins/losses/draws, Elo differen
 | `scripts/run_match.bat`| Automated local self-play match script (cutechess-cli)    |
 | `scripts/check_los.bat`| PGN result analyzer (Elo, LOS)                            |
 | `SEARCH.md`            | Technical documentation of the search algorithm           |
+| `LICENSE`              | GNU General Public License v3.0                           |
 
 ## Development Notes
 
@@ -181,15 +182,29 @@ AnkaX uses techniques common in strong chess engines:
 
 ## Credits
 
-- Opening book: `noob_3moves.epd` (7,422 positions, 6 plies) by **Stefan Pohl** ([sp-ohl.de](https://www.sp-ohl.de/books/books.html))
+- Opening book: `noob_3moves.epd` from the [Stockfish books repository](https://github.com/official-stockfish/books), contributed by **noobpwnftw**
 - Testing framework: [cutechess-cli](https://github.com/cutechess/cutechess) by Ilari Pihlajisto, Arto Jonsson, and contributors
 - Engine architecture inspired by the [Chess Programming Wiki](https://www.chessprogramming.org/) and the BBC/Code Monkey King tutorial series
+- Several search and move ordering ideas inspired by [Stockfish](https://github.com/official-stockfish/Stockfish) (GPLv3)
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+AnkaX is free software, licensed under the **GNU General Public License v3.0 or later**
+(GPL-3.0-or-later). See [LICENSE](LICENSE) for the full text.
+
+In short:
+
+1. You may use, study, modify, and redistribute AnkaX.
+2. If you distribute AnkaX or a modified version (source or binary), you must
+   release it under the same license and make the complete source code available.
+3. AnkaX comes with no warranty.
+
+Releases up to and including v1.1.1 were published under the MIT License.
 
 ## Contributing
 
 Contributions are welcome. Pull requests should include a clear description of
 the change and any relevant validation steps (perft results, self-play Elo).
+
+By submitting a contribution, you agree that it will be licensed under the
+GPL-3.0-or-later license.
