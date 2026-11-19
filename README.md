@@ -25,7 +25,7 @@ with all major chess GUIs.
 > Self-play results measured at 10+0.1 using
 > [cutechess-cli](https://github.com/cutechess/cutechess) with the
 > [noob_3moves](https://www.sp-ohl.de/books/books.html) opening book
-> (12 plies, randomized).
+> (6 plies / 3 full moves per side, 7,422 positions, randomized).
 
 ## Features
 
@@ -49,43 +49,55 @@ with all major chess GUIs.
 
 ## Installation
 
-    git clone https://github.com/amrouanka/ankax-chess.git
-    cd ankax-chess
-    dotnet restore
+```bash
+git clone https://github.com/amrouanka/ankax-chess.git
+cd ankax-chess
+dotnet restore
+```
 
 ## Build
 
-    dotnet build -c Release
+```bash
+dotnet build -c Release
+```
 
 Or publish a self-contained single-file executable (no .NET runtime required):
 
-    dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:PublishAot=false
+```bash
+dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:PublishAot=false
+```
 
 The output will be in `bin/Release/net10.0/win-x64/publish/AnkaX.exe`.
 
 ## Run
 
-    dotnet run
+```bash
+dotnet run
+```
 
 Or run the published executable directly:
 
-    AnkaX.exe
+```cmd
+AnkaX.exe
+```
 
 The engine starts in UCI mode and waits for commands from standard input.
 
 ## Example UCI Session
 
-    > AnkaX.exe
-    uci
-    id name AnkaX v1.1.2
-    id author Amrou Louai Anka
-    uciok
-    isready
-    readyok
-    position startpos moves e2e4 e7e5
-    go depth 10
-    info score cp 37 depth 9 nodes 69791 pv e2e4 e7e5 g1f3 g8f6 b1c3 b8c6 d2d4 e5d4 f3d4
-    bestmove g1f3
+```
+> AnkaX.exe
+uci
+id name AnkaX v1.1.2
+id author Amrou Louai Anka
+uciok
+isready
+readyok
+position startpos moves e2e4 e7e5
+go depth 10
+info score cp 37 depth 9 nodes 69791 pv e2e4 e7e5 g1f3 g8f6 b1c3 b8c6 d2d4 e5d4 f3d4
+bestmove g1f3
+```
 
 ## Testing & Self-Play
 
@@ -96,15 +108,16 @@ This repository includes scripts for automated self-play testing using
 
 1. Install [cutechess-cli](https://github.com/cutechess/cutechess/releases)
    and update the `CUTECHESS` path in `scripts/run_match.bat` if needed.
-2. Place an opening book in the `books/` directory. This project uses
-   [UHO 4060 v4](https://www.sp-ohl.de/books/books.html) by Stefan Pohl.
+2. The opening book `noob_3moves.epd` (7,422 positions after 3 moves per side / 6 plies) is located in `data/`.
 
 ### Running a Match Locally
 
-    scripts/run_match.bat
+```cmd
+scripts/run_match.bat
+```
 
 This runs 10,000 games between the current dev build and the release build
-in `releases/AnkaX.exe`, using 3+0.05 time control with the UHO book.
+in `releases/AnkaX.exe`, using 3+0.05 time control with `data/noob_3moves.epd`.
 Results are saved to `dev_vs_release.pgn`.
 
 ### Running a Match via GitHub Actions
@@ -121,7 +134,9 @@ Get-ChildItem -Recurse -Filter "result_*.pgn" | Get-Content | Set-Content dev_vs
 
 ### Checking Results
 
-    scripts/check_los.bat
+```cmd
+scripts/check_los.bat
+```
 
 Parses the PGN and displays Elo difference, error margin, and Likelihood of
 Superiority (LOS).
@@ -135,7 +150,6 @@ Superiority (LOS).
 | `Board.cs`             | Board state, FEN parsing, copy/takeback                   |
 | `MoveGenerator.cs`     | Pseudo-legal move generation and make-move                |
 | `PieceAttacks.cs`      | Attack tables (leapers, magic bitboards for sliders)      |
-| `BitboardOperations.cs`| Bitboard helpers (popcount, LSB, set/pop bit)             |
 | `Search.cs`            | PVS alpha-beta search, quiescence, pruning, move ordering |
 | `Evaluation.cs`        | Tapered evaluation with PeSTO PSTs and positional features|
 | `TranspositionTable.cs`| Hash table with Zobrist keying                            |
@@ -145,11 +159,11 @@ Superiority (LOS).
 | `Enums.cs`             | Piece, square, castling, and flag constants               |
 | `AnkaX.csproj`         | .NET 10 project file                                      |
 | `.github/workflows/`   | GitHub Actions CI for automated self-play testing         |
-| `books/`               | Opening books for self-play testing                       |
+| `data/`                | Opening book (`noob_3moves.epd`) and test suites          |
 | `releases/`            | Published executables for version comparison              |
 | `scripts/run_match.bat`| Automated self-play match script (cutechess-cli)          |
 | `scripts/check_los.bat`| PGN result analyzer (Elo, LOS)                            |
-| `SEARCH.md`            | Technical documentation of the search                     |
+| `SEARCH.md`            | Technical documentation of the search algorithm           |
 
 ## Development Notes
 
@@ -158,14 +172,14 @@ AnkaX uses techniques common in strong chess engines:
 - Bitboards for fast board operations
 - Flat-array storage for hot-path performance (no multi-dimensional arrays on the search path)
 - Pre-allocated move lists to eliminate GC pressure during search
-- Aggressive move ordering for search efficiency
+- Aggressive move ordering with on-demand move selection
 - Multiple pruning heuristics for reduced search cost
 - Transposition tables for repeated positions
 - Hardware-accelerated bit counting (`POPCNT`)
 
 ## Credits
 
-- Opening book: [UHO 4060 v4](https://www.sp-ohl.de/books/books.html) by **Stefan Pohl**
+- Opening book: `noob_3moves.epd` (7,422 positions, 6 plies) by **Stefan Pohl** ([sp-ohl.de](https://www.sp-ohl.de/books/books.html))
 - Testing framework: [cutechess-cli](https://github.com/cutechess/cutechess) by Ilari Pihlajisto, Arto Jonsson, and contributors
 - Engine architecture inspired by the [Chess Programming Wiki](https://www.chessprogramming.org/) and the BBC/Code Monkey King tutorial series
 
