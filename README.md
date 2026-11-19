@@ -41,7 +41,7 @@ with all major chess GUIs.
 - Reverse futility and futility pruning
 - Check extensions and mate distance pruning
 - Quiescence search with delta pruning
-- Move ordering: TT move, MVV-LVA, killer moves, history heuristic, PV move
+- Move ordering: TT move, Q-promotions, PV move, MVV-LVA captures, killer moves, counter-move history, history heuristic
 - Transposition table with Zobrist hashing
 - Repetition detection and fifty-move rule
 - Tapered evaluation (MG/EG): material, PSTs, bishop pair, mobility, rook open files, passed pawns, isolated pawns, king safety, knight outposts, queenless king centralization
@@ -77,7 +77,7 @@ The engine starts in UCI mode and waits for commands from standard input.
 
     > AnkaX.exe
     uci
-    id name AnkaX v1.1.1
+    id name AnkaX v1.1.2
     id author Amrou Louai Anka
     uciok
     isready
@@ -133,7 +133,7 @@ Superiority (LOS).
 | `Program.cs`           | Entry point, tactical test suite, perft driver            |
 | `Uci.cs`               | UCI protocol parser and engine loop                       |
 | `Board.cs`             | Board state, FEN parsing, copy/takeback                   |
-| `MoveGenerator.cs`     | Legal move generation and make-move                       |
+| `MoveGenerator.cs`     | Pseudo-legal move generation and make-move                |
 | `PieceAttacks.cs`      | Attack tables (leapers, magic bitboards for sliders)      |
 | `BitboardOperations.cs`| Bitboard helpers (popcount, LSB, set/pop bit)             |
 | `Search.cs`            | PVS alpha-beta search, quiescence, pruning, move ordering |
