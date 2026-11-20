@@ -45,7 +45,7 @@ public static class Tuner
     public static int Run(string[] args)
     {
         string dataPath = args.Length > 1 ? args[1] : "data/zurichess.txt";
-        int maxEpochs = args.Length > 2 && int.TryParse(args[2], out int e) ? e : 100;
+        int maxEpochs = args.Length > 2 && int.TryParse(args[2], out int e) ? e : 50;
 
         if (!File.Exists(dataPath))
         {
