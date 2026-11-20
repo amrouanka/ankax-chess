@@ -43,7 +43,6 @@ public static class Evaluation
     //  Before Texel Tuning:
     //      - Replace "private readonly"        with "public" for arrays
     //      - Replace "private const"           with "public static" for int
-    //      - Replace "private"                 with "internal" for fixed values
     //  Don't forget to revert after Texel Tuning and before build
     // =========================================================================
 
