@@ -50,6 +50,9 @@ internal static class Program
             if (string.Equals(args[0], "bench", StringComparison.OrdinalIgnoreCase))
                 return HandleBenchCommand(args);
 
+            if (string.Equals(args[0], "tune", StringComparison.OrdinalIgnoreCase))
+                return Tuner.Run(args);
+
             return PrintUsageAndExit();
         }
         catch (Exception ex)
@@ -62,11 +65,12 @@ internal static class Program
     private static int PrintUsageAndExit()
     {
         Console.WriteLine("Usage:");
-        Console.WriteLine("  AnkaX                      Run UCI mode");
-        Console.WriteLine("  AnkaX perft <depth>        Run perft on starting position");
-        Console.WriteLine("  AnkaX perft <depth> <fen>  Run perft on given FEN");
-        Console.WriteLine("  AnkaX perft suite          Run built-in perft test suite");
-        Console.WriteLine("  AnkaX bench [depth]        Run benchmark (default depth 12)");
+        Console.WriteLine("  AnkaX                          Run UCI mode");
+        Console.WriteLine("  AnkaX perft <depth>            Run perft on starting position");
+        Console.WriteLine("  AnkaX perft <depth> <fen>      Run perft on given FEN");
+        Console.WriteLine("  AnkaX perft suite              Run built-in perft test suite");
+        Console.WriteLine("  AnkaX bench [depth]            Run benchmark (default depth 12)");
+        Console.WriteLine("  AnkaX tune [dataset] [epochs]  Run Texel evaluation tuner");
         return 1;
     }
 

@@ -40,6 +40,9 @@ public static class Evaluation
     //  Nothing in this section allocates at runtime; everything is a constant
     //  or a readonly array built once. Changing a number here is the only
     //  way to retune the evaluation — no logic needs to move.
+    //  When Texel Tuning:
+    //      - Change "private static readonly" to "public static" for arrays
+    //      - Change "private const"           to "public static" for int
     // =========================================================================
 
     #region Material & Phase
@@ -48,8 +51,8 @@ public static class Evaluation
     //   0=Pawn  1=Knight  2=Bishop  3=Rook  4=Queen  5=King
     // King is 0 because it's never captured; its "value" is implicit in game
     // termination, not in evaluation.
-    private static readonly int[] MgMaterial = [82, 337, 365, 457, 1041, 0];
-    private static readonly int[] EgMaterial = [90, 281, 297, 520, 940, 0];
+    public static int[] MgMaterial = [82, 337, 365, 457, 1041, 0];
+    public static int[] EgMaterial = [90, 281, 297, 520, 940, 0];
 
     // Starting position phase: 2 sides × (2×Knight + 2×Bishop + 2×Rook + 1×Queen)
     //   = 2 × (2·1 + 2·1 + 2·2 + 1·4) = 24.
@@ -63,45 +66,45 @@ public static class Evaluation
 
     // Having both bishops is worth a small bonus because they cover
     // complementary colour complexes.
-    private const int BishopPairMg = 25, BishopPairEg = 49;
+    public static int BishopPairMg = 25, BishopPairEg = 49;
 
     // Mobility = (number of safe destination squares) − (a baseline).
     // Subtracting a baseline keeps the "average" piece near zero so the
     // mobility term doesn't silently inflate material values.
-    private const int KnightMobMg = 1, KnightMobEg = 0, KnightMobBase = 4;
-    private const int BishopMobMg = 4, BishopMobEg = 4, BishopMobBase = 6;
+    public static int KnightMobMg = 1, KnightMobEg = 0, KnightMobBase = 4;
+    public static int BishopMobMg = 4, BishopMobEg = 4, BishopMobBase = 6;
 
     // Rook on a file with no friendly pawn:
     //   semi-open = only enemy pawns on it (good attacking lane)
     //   open      = no pawns at all (best — rook sees the whole file)
-    private const int RookSemiOpenMg = 21, RookSemiOpenEg = 15;
-    private const int RookOpenMg = 54, RookOpenEg = 8;
+    public static int RookSemiOpenMg = 21, RookSemiOpenEg = 15;
+    public static int RookOpenMg = 54, RookOpenEg = 8;
 
     // Passed pawn bonus indexed by "distance from own back rank" (0..7).
     // A pawn gets this if no enemy pawn can block or capture it on its way
     // to promotion. The closer to promotion, the bigger the bonus — much
     // larger in the endgame where promotion threats dominate.
-    private static readonly int[] PassedMg = [0, 0, 34, 14, 11, 11, 10, 0];
-    private static readonly int[] PassedEg = [0, 48, 95, 52, 26, 7, 4, 0];
+    public static int[] PassedMg = [0, 0, 34, 14, 11, 11, 10, 0];
+    public static int[] PassedEg = [0, 48, 95, 52, 26, 7, 4, 0];
 
     // A pawn with no friendly pawn on either adjacent file. Weak because it
     // can never be defended by another pawn.
-    private const int IsolatedMg = -19, IsolatedEg = -8;
+    public static int IsolatedMg = -19, IsolatedEg = -8;
 
     // King safety: penalties for open/semi-open files near the king. Only
     // applied in the middlegame — in the endgame the king wants to be active.
-    private const int KingOwnOpenMg = 71, KingOwnSemiOpenMg = 18;
-    private const int KingAdjacentOpenMg = 37, KingAdjacentSemiOpenMg = 13;
+    public static int KingOwnOpenMg = 71, KingOwnSemiOpenMg = 18;
+    public static int KingAdjacentOpenMg = 37, KingAdjacentSemiOpenMg = 13;
 
     // Once both queens are gone, encourage the king toward the centre so it
     // can help its pawns promote.
-    private const int QueenlessKingCenterMg = 20;
+    public static int QueenlessKingCenterMg = 20;
 
     // Knight sitting on a square where:
     //   • it's protected by a friendly pawn
     //   • it can't be kicked by any enemy pawn on adjacent files
     // Outposts are classical strong squares (think c5/d5/e5/f5 for White).
-    private const int KnightOutpostMg = 46;
+    public static int KnightOutpostMg = 46;
 
     // Tempo bonus: static advantage awarded to the side to move
     private const int TempoBonus = 8;
