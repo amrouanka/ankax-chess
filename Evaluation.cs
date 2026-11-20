@@ -41,8 +41,9 @@ public static class Evaluation
     //  or a readonly array built once. Changing a number here is the only
     //  way to retune the evaluation — no logic needs to move.
     //  Before Texel Tuning:
-    //      - Change "private static readonly" to "public static" for arrays
-    //      - Change "private const"           to "public static" for int
+    //      - Replace "private readonly"        with "public" for arrays
+    //      - Replace "private const"           with "public static" for int
+    //      - Replace "private"                 with "internal" for fixed values
     //  Don't forget to revert after Texel Tuning and before build
     // =========================================================================
 
