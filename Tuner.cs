@@ -73,7 +73,7 @@ public static class Tuner
         }
 
         string datasetPath = args[1];
-        int maxEpochs = args.Length >= 3 && int.TryParse(args[2], out int ep) && ep > 0 ? ep : 1000;
+        int maxEpochs = args.Length >= 3 && int.TryParse(args[2], out int ep) && ep > 0 ? ep : 10000;
 
         Console.WriteLine("=== AnkaX Sparse Texel Tuner (CSR + Multi-Threaded Adam) ===");
         Console.WriteLine($"Dataset:    {datasetPath}");
@@ -110,6 +110,16 @@ public static class Tuner
         Console.WriteLine("\n[3/4] Fitting optimal sigmoid constant K...");
         double k = FindOptimalK(positions, features, initialMg, initialEg);
         double scale = k * Math.Log(10.0) / 400.0;
+
+        // =========================================================================
+        // UNCOMMENT THE TWO LINES BELOW FOR A 100% ZERO-BIAS (TABULA RASA) RUN:
+        // =========================================================================
+        // Array.Clear(initialMg);
+        // Array.Clear(initialEg);
+        // Console.WriteLine("[Zero-Bias] Wiped all initial weights to 0.0! Tuning from complete scratch...");
+        // =========================================================================
+
+        // Re-compute initial MSE after potential zeroing so statistics are accurate
         double initialMse = ComputeMse(positions, features, initialMg, initialEg, scale);
         Console.WriteLine($"Optimal K = {k:F4} (scale = {scale:F6}), Initial MSE = {initialMse:F6}");
 
@@ -142,6 +152,11 @@ public static class Tuner
         double currentMse = initialMse;
         double invN = 1.0 / positions.Length;
         const double invTotalPhase = 1.0 / Evaluation.TotalPhase;
+
+        // Start bestMse at double.MaxValue so it tracks currentMse correctly
+        double bestMse = double.MaxValue;
+        int noImprovementEpochs = 0;
+        const double minImprovementThreshold = 1e-7; // Threshold for smooth convergence
 
         for (int epoch = 1; epoch <= maxEpochs; epoch++)
         {
@@ -269,6 +284,22 @@ public static class Tuner
                     double mHatEg = mEg[i] / biasCorr1;
                     double vHatEg = vEg[i] / biasCorr2;
                     weightsEg[i] -= lr * mHatEg / (Math.Sqrt(vHatEg) + eps);
+                }
+            }
+
+            // --- AUTOMATIC EARLY STOPPING CHECK ---
+            if (bestMse - currentMse > minImprovementThreshold)
+            {
+                bestMse = currentMse;
+                noImprovementEpochs = 0; // Progress made, reset patience counter
+            }
+            else
+            {
+                noImprovementEpochs++;
+                if (noImprovementEpochs >= 50) // Stop if no meaningful improvement for 50 consecutive epochs
+                {
+                    Console.WriteLine($"\n[Early Stopping] Converged at epoch {epoch}! MSE plateaued at {currentMse:F6}.");
+                    break;
                 }
             }
 
@@ -784,7 +815,6 @@ public static class Tuner
         Console.WriteLine("\n===============================================================================");
         Console.WriteLine("// Ready to paste tuned parameters for Evaluation.cs:");
         Console.WriteLine("===============================================================================");
-        Console.WriteLine(); Console.WriteLine(); Console.WriteLine(); Console.WriteLine();
 
         Console.WriteLine("    #region Material & Phase\n");
 
