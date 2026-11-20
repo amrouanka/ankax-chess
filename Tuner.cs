@@ -1,101 +1,91 @@
 using System.Diagnostics;
 using System.Globalization;
-using System.Runtime.CompilerServices;
 using static System.Numerics.BitOperations;
 using static Board;
 using static MoveGenerator;
 using static PieceAttacks;
-using static Evaluation;
 
 // =============================================================================
-//  Tuner — Fast Texel Evaluation Parameter Tuning Tool
+//  Tuner — Fast Texel Evaluation Tuning (cached features)
 //
-//  Methodology:
-//      Texel tuning fits static evaluation terms to real game outcomes using
-//      quiet position datasets (`score | FEN` per line).
+//  Sigmoid:
+//      P(Win) = 1 / (1 + 10 ^ (-K * Eval / 400))        (K is near 1)
 //
-//  Sigmoid Function:
-//      P(Win) = 1 / (1 + 10 ^ (-K * Eval / 400))
+//  Why it is fast:
+//      Evaluate() is linear in every tunable weight:
+//          mg = PST part + sum(weight * coefficient)     (same for eg)
+//      The coefficients (e.g. "white has 2 more isolated pawns" = +2) depend
+//      only on the position, never on the weights. So we:
+//        1. Parse each FEN once and cache its coefficients, PST sums and phase.
+//        2. Keep a running mg / eg / squared-error per position.
+//        3. To test "weight + 1", only touch positions where that feature's
+//           coefficient is non-zero. No board restore, no Evaluate() call.
 //
-//  Speed:
-//      Every tunable term in Evaluate() is linear:  eval = Σ coef_f × weight_f
-//      plus a per-position constant (the PSTs). Feature coefficients are
-//      extracted ONCE per position. Coordinate descent then only touches
-//      integer arrays — Evaluate() and the board are never called again.
+//  Safety net:
+//      While loading, the score rebuilt from cached features is compared with
+//      Evaluation.Evaluate() for EVERY position. Any mismatch aborts the run,
+//      so the tuner can never silently drift out of sync with the engine.
 //
-//  Guarantees:
-//      After extraction, the feature-based score is checked against
-//      Evaluate() for every position. Any mismatch aborts the run.
-//
-//  Not tuned (by design):
-//      TempoBonus      — side-to-move artifact in game datasets
-//      KnightMobBase / BishopMobBase — baked into the mobility coefficient
-//      PSTs            — treated as a per-position constant
+//  Adding a new evaluation term later:
+//      1. Add a Feat* constant.  2. Count it in ExtractSide().
+//      3. Register its weight(s) in RegisterParameters().
+//      Forget a step and the startup check tells you.
 // =============================================================================
 
 public static class Tuner
 {
     // =========================================================================
-    //  SECTION 1 — Constants & Feature Layout
+    //  SECTION 1 — Feature Layout & Data
     // =========================================================================
 
-    private const int TotalPhase = 24;
-    private const int TempoBonus = 8;
-    private const double Ln10 = 2.302585092994046;
+    // One "feature" = one coefficient per position (White count − Black count).
+    // An MG weight and an EG weight can share the same feature.
+    private const int FeatMaterial = 0;               // +0..4: Pawn, Knight, Bishop, Rook, Queen
+    private const int FeatPassed = 5;                 // +0..7: same index as PassedMg / PassedEg
+    private const int FeatBishopPair = 13;
+    private const int FeatKnightMob = 14;
+    private const int FeatBishopMob = 15;
+    private const int FeatRookSemiOpen = 16;
+    private const int FeatRookOpen = 17;
+    private const int FeatIsolated = 18;
+    private const int FeatKingOwnOpen = 19;
+    private const int FeatKingOwnSemiOpen = 20;
+    private const int FeatKingAdjacentOpen = 21;
+    private const int FeatKingAdjacentSemiOpen = 22;
+    private const int FeatQueenlessKingCenter = 23;
+    private const int FeatKnightOutpost = 24;
+    private const int FeatureCount = 25;
 
-    // Middlegame features
-    private const int MgMat = 0;                 // 5 slots: P N B R Q
-    private const int MgPassed = 5;              // 6 slots: PassedMg[1..6]
-    private const int MgIsolated = 11;
-    private const int MgKnightMob = 12;
-    private const int MgKnightOutpost = 13;
-    private const int MgBishopMob = 14;
-    private const int MgBishopPair = 15;
-    private const int MgRookSemiOpen = 16;
-    private const int MgRookOpen = 17;
-    private const int MgKingOwnOpen = 18;
-    private const int MgKingOwnSemiOpen = 19;
-    private const int MgKingAdjOpen = 20;
-    private const int MgKingAdjSemiOpen = 21;
-    private const int MgQueenlessCenter = 22;
+    // Phase contribution per piece type (Pawn, Knight, Bishop, Rook, Queen, King).
+    private static readonly int[] PhaseWeight = [0, 1, 1, 2, 4, 0];
 
-    // Endgame features
-    private const int EgMat = 23;                // 5 slots: P N B R Q
-    private const int EgPassed = 28;             // 6 slots: PassedEg[1..6]
-    private const int EgIsolated = 34;
-    private const int EgKnightMob = 35;
-    private const int EgBishopMob = 36;
-    private const int EgBishopPair = 37;
-    private const int EgRookSemiOpen = 38;
-    private const int EgRookOpen = 39;
+    // K search range. The optimum should land well inside it.
+    private const double KMin = 0.1, KMax = 5.0;
 
-    private const int FirstEgFeature = EgMat;
-    private const int FeatureCount = 40;
+    // A tunable weight: which feature it multiplies, and whether it feeds the
+    // middlegame or the endgame score.
+    private sealed record Param(string Name, int Feature, bool IsMg, Func<int> Get, Action<int> Set);
 
-    // =========================================================================
-    //  SECTION 2 — Data Structures
-    // =========================================================================
+    // Per-position cache (index = position number).
+    private static int positionCount;
+    private static double[] results = [];   // 1.0 / 0.5 / 0.0 from White's view
+    private static int[] mgScore = [];      // current middlegame score (White − Black)
+    private static int[] egScore = [];      // current endgame score (White − Black)
+    private static int[] mgPhase = [];      // 0..TotalPhase
+    private static int[] tempo = [];        // +TempoBonus if White to move, else −TempoBonus
+    private static double[] sqErr = [];     // current squared error of this position
+    private static short[][] coeffs = [];   // coeffs[feature][position]
 
-    // Maps a feature slot to the Evaluation.cs field it represents.
-    private sealed record Param(string Name, int Feature, Func<int> Get, Action<int> Set);
-
-    private static int _count;
-    private static short[][] _coef = [];     // _coef[feature][position]
-    private static int[] _mgSum = [];        // current mg total per position (PST + Σ coef×w)
-    private static int[] _egSum = [];        // current eg total per position
-    private static byte[] _phase = [];       // mgPhase (0..24)
-    private static sbyte[] _stm = [];        // +1 White to move, -1 Black to move
-    private static double[] _result = [];    // 1.0 / 0.5 / 0.0 from White's view
-    private static int[] _weights = new int[FeatureCount];
+    private static double sigmoidScale;     // K * ln(10) / 400
 
     // =========================================================================
-    //  SECTION 3 — Main Entry Point & Tuning Loop
+    //  SECTION 2 — Main Entry Point & Tuning Loop
     // =========================================================================
 
     public static int Run(string[] args)
     {
         string dataPath = args.Length > 1 ? args[1] : "data/zurichess.txt";
-        int maxEpochs = args.Length > 2 && int.TryParse(args[2], out int e) ? e : 50;
+        int maxEpochs = args.Length > 2 && int.TryParse(args[2], out int parsedEpochs) ? parsedEpochs : 1000;
 
         if (!File.Exists(dataPath))
         {
@@ -104,84 +94,43 @@ public static class Tuner
         }
 
         Console.WriteLine("=================================================");
-        Console.WriteLine("   AnkaX Texel Evaluation Tuning Tool (fast)");
+        Console.WriteLine("   AnkaX Texel Evaluation Tuning Tool");
         Console.WriteLine("=================================================");
+        Console.WriteLine($"Loading dataset: '{dataPath}'...");
 
         List<Param> parameters = RegisterParameters();
-        int[] initialWeights = new int[FeatureCount];
-        foreach (var prm in parameters)
-        {
-            _weights[prm.Feature] = prm.Get();
-            initialWeights[prm.Feature] = prm.Get();
-        }
 
-        // Step 1: Load dataset, extract features, verify against Evaluate()
-        var sw = Stopwatch.StartNew();
-        Console.WriteLine($"Loading dataset: '{dataPath}'...");
-        int[] refEval = LoadAndExtract(dataPath);
-        Console.WriteLine($"Loaded {_count:N0} positions, extracted {FeatureCount} features in {sw.Elapsed.TotalSeconds:F1}s.");
+        if (!LoadDataset(dataPath, parameters)) return 1;
+        Console.WriteLine($"Loaded {positionCount:N0} positions. Cached features match Evaluate() on all of them.\n");
 
-        for (int f = 0; f < FeatureCount; f++)
-            ApplyDelta(f, _weights[f]);
-
-        int mismatches = Verify(refEval);
-        if (mismatches != 0)
-        {
-            Console.WriteLine($"[!] Feature extraction does not match Evaluate() on {mismatches:N0} positions. Aborting.");
-            return 1;
-        }
-        Console.WriteLine("[+] Feature extraction verified: matches Evaluate() on every position.\n");
-
-        // Step 2: Initial K and loss
-        Console.WriteLine("Calculating optimal scaling constant K...");
+        // Step 1: Fit K once against the current evaluation, then keep it fixed.
+        Console.WriteLine("Calculating scaling constant K...");
         double bestK = FindOptimalK();
-        double initialLoss = ComputeLoss(bestK);
-        Console.WriteLine($"Initial K = {bestK:F6} | Initial MSE Loss = {initialLoss:F8}\n");
+        double initialLoss = RefreshErrors(bestK);
+        Console.WriteLine($"K = {bestK:F3} | Initial MSE Loss = {initialLoss:F8}");
 
-        // Step 3: Coordinate descent
+        if (bestK <= KMin + 1e-9 || bestK >= KMax - 1e-9)
+            Console.WriteLine("[!] Warning: K is at the edge of its search range. Check the dataset's result format before trusting this run.");
+        Console.WriteLine();
+
+        // Step 2: Coordinate descent (+1 / -1 per weight, open boundaries).
         Console.WriteLine($"Starting optimization for {parameters.Count} parameters (Max Epochs: {maxEpochs})...\n");
+        Stopwatch timer = Stopwatch.StartNew();
         double currentLoss = initialLoss;
 
         for (int epoch = 1; epoch <= maxEpochs; epoch++)
         {
-            sw.Restart();
-
-            // Re-calibrate K each epoch; the loss must be re-measured under the new K
-            bestK = FindOptimalK();
-            currentLoss = ComputeLoss(bestK);
             int updatedCount = 0;
 
-            foreach (var prm in parameters)
+            foreach (Param prm in parameters)
             {
-                int f = prm.Feature;
-
-                // Step +1
-                ApplyDelta(f, +1);
-                double lossPlus = ComputeLoss(bestK);
-                if (lossPlus < currentLoss)
-                {
-                    _weights[f]++;
-                    currentLoss = lossPlus;
+                // Try +1 first; only if that does not help, try -1.
+                if (TryStep(prm, +1) || TryStep(prm, -1))
                     updatedCount++;
-                    continue;
-                }
-
-                // Step -1 (net from +1 is -2)
-                ApplyDelta(f, -2);
-                double lossMinus = ComputeLoss(bestK);
-                if (lossMinus < currentLoss)
-                {
-                    _weights[f]--;
-                    currentLoss = lossMinus;
-                    updatedCount++;
-                    continue;
-                }
-
-                // Revert to original (net 0)
-                ApplyDelta(f, +1);
             }
 
-            Console.WriteLine($"Epoch {epoch,3}: MSE Loss = {currentLoss:F8} | K = {bestK:F6} | Updated = {updatedCount,2} | {sw.Elapsed.TotalSeconds:F1}s");
+            currentLoss = MeanSquaredError();
+            Console.WriteLine($"Epoch {epoch,4}: MSE Loss = {currentLoss:F8} | Parameters Updated = {updatedCount}");
 
             if (updatedCount == 0)
             {
@@ -190,82 +139,127 @@ public static class Tuner
             }
         }
 
-        // Step 4: Write results back to Evaluation fields and print
-        foreach (var prm in parameters)
-            prm.Set(_weights[prm.Feature]);
+        Console.WriteLine($"Tuning time: {timer.Elapsed.TotalSeconds:F1} s");
 
-        PrintChanges(parameters, initialWeights);
+        // Step 3: Print copy-paste ready C# output.
         PrintTunedCode(initialLoss, currentLoss);
 
         return 0;
     }
 
+    // Tests "weight + delta". Keeps the change only if the total error drops.
+    private static bool TryStep(Param prm, int delta)
+    {
+        short[] column = coeffs[prm.Feature];
+        int mgDelta = prm.IsMg ? delta : 0;
+        int egDelta = prm.IsMg ? 0 : delta;
+
+        // Pass 1: how would the summed squared error change?
+        double change = 0.0;
+        for (int i = 0; i < positionCount; i++)
+        {
+            int c = column[i];
+            if (c == 0) continue;   // feature absent: this position is unaffected
+
+            change += SquaredError(i, mgScore[i] + c * mgDelta, egScore[i] + c * egDelta) - sqErr[i];
+        }
+
+        if (change >= 0.0) return false;
+
+        // Pass 2: commit the step to the cached scores.
+        for (int i = 0; i < positionCount; i++)
+        {
+            int c = column[i];
+            if (c == 0) continue;
+
+            mgScore[i] += c * mgDelta;
+            egScore[i] += c * egDelta;
+            sqErr[i] = SquaredError(i, mgScore[i], egScore[i]);
+        }
+
+        // Keep the Evaluation field in sync so PrintTunedCode can read it.
+        // (Evaluate() itself is not called again after loading.)
+        prm.Set(prm.Get() + delta);
+        return true;
+    }
+
     // =========================================================================
-    //  SECTION 4 — Parameter Registration
+    //  SECTION 3 — Parameter Registration
     // =========================================================================
 
     private static List<Param> RegisterParameters()
     {
         List<Param> list = new();
 
-        // Material (Pawn, Knight, Bishop, Rook, Queen). King is always 0.
+        void AddMg(string name, int feature, Func<int> get, Action<int> set) => list.Add(new(name, feature, true, get, set));
+        void AddEg(string name, int feature, Func<int> get, Action<int> set) => list.Add(new(name, feature, false, get, set));
+
+        // Material (Pawn, Knight, Bishop, Rook, Queen)
         string[] pieceNames = ["Pawn", "Knight", "Bishop", "Rook", "Queen"];
         for (int i = 0; i < 5; i++)
         {
             int idx = i;
-            list.Add(new($"MgMaterial[{pieceNames[idx]}]", MgMat + idx, () => MgMaterial[idx], v => MgMaterial[idx] = v));
-            list.Add(new($"EgMaterial[{pieceNames[idx]}]", EgMat + idx, () => EgMaterial[idx], v => EgMaterial[idx] = v));
+            AddMg($"MgMaterial_{pieceNames[idx]}", FeatMaterial + idx, () => Evaluation.MgMaterial[idx], v => Evaluation.MgMaterial[idx] = v);
+            AddEg($"EgMaterial_{pieceNames[idx]}", FeatMaterial + idx, () => Evaluation.EgMaterial[idx], v => Evaluation.EgMaterial[idx] = v);
         }
 
-        // Passed pawns by rank index 1..6 (index = sq >> 3 for White, a8 = 0,
-        // so index 1 is one step from promotion and index 6 is the start rank).
-        for (int r = 1; r <= 6; r++)
+        // Passed pawns. Array index = squares left to promotion
+        // (1 = on the 7th rank, 6 = on its starting square).
+        for (int i = 1; i <= 6; i++)
         {
-            int idx = r;
-            list.Add(new($"PassedMg[{idx}]", MgPassed + idx - 1, () => PassedMg[idx], v => PassedMg[idx] = v));
-            list.Add(new($"PassedEg[{idx}]", EgPassed + idx - 1, () => PassedEg[idx], v => PassedEg[idx] = v));
+            int idx = i;
+            AddMg($"PassedMg[{idx}]", FeatPassed + idx, () => Evaluation.PassedMg[idx], v => Evaluation.PassedMg[idx] = v);
+            AddEg($"PassedEg[{idx}]", FeatPassed + idx, () => Evaluation.PassedEg[idx], v => Evaluation.PassedEg[idx] = v);
         }
 
-        list.Add(new("IsolatedMg", MgIsolated, () => IsolatedMg, v => IsolatedMg = v));
-        list.Add(new("IsolatedEg", EgIsolated, () => IsolatedEg, v => IsolatedEg = v));
+        // Positional features
+        AddMg("BishopPairMg", FeatBishopPair, () => Evaluation.BishopPairMg, v => Evaluation.BishopPairMg = v);
+        AddEg("BishopPairEg", FeatBishopPair, () => Evaluation.BishopPairEg, v => Evaluation.BishopPairEg = v);
+        AddMg("KnightMobMg", FeatKnightMob, () => Evaluation.KnightMobMg, v => Evaluation.KnightMobMg = v);
+        AddEg("KnightMobEg", FeatKnightMob, () => Evaluation.KnightMobEg, v => Evaluation.KnightMobEg = v);
+        AddMg("BishopMobMg", FeatBishopMob, () => Evaluation.BishopMobMg, v => Evaluation.BishopMobMg = v);
+        AddEg("BishopMobEg", FeatBishopMob, () => Evaluation.BishopMobEg, v => Evaluation.BishopMobEg = v);
+        AddMg("RookSemiOpenMg", FeatRookSemiOpen, () => Evaluation.RookSemiOpenMg, v => Evaluation.RookSemiOpenMg = v);
+        AddEg("RookSemiOpenEg", FeatRookSemiOpen, () => Evaluation.RookSemiOpenEg, v => Evaluation.RookSemiOpenEg = v);
+        AddMg("RookOpenMg", FeatRookOpen, () => Evaluation.RookOpenMg, v => Evaluation.RookOpenMg = v);
+        AddEg("RookOpenEg", FeatRookOpen, () => Evaluation.RookOpenEg, v => Evaluation.RookOpenEg = v);
+        AddMg("IsolatedMg", FeatIsolated, () => Evaluation.IsolatedMg, v => Evaluation.IsolatedMg = v);
+        AddEg("IsolatedEg", FeatIsolated, () => Evaluation.IsolatedEg, v => Evaluation.IsolatedEg = v);
+        AddMg("KingOwnOpenMg", FeatKingOwnOpen, () => Evaluation.KingOwnOpenMg, v => Evaluation.KingOwnOpenMg = v);
+        AddMg("KingOwnSemiOpenMg", FeatKingOwnSemiOpen, () => Evaluation.KingOwnSemiOpenMg, v => Evaluation.KingOwnSemiOpenMg = v);
+        AddMg("KingAdjacentOpenMg", FeatKingAdjacentOpen, () => Evaluation.KingAdjacentOpenMg, v => Evaluation.KingAdjacentOpenMg = v);
+        AddMg("KingAdjacentSemiOpenMg", FeatKingAdjacentSemiOpen, () => Evaluation.KingAdjacentSemiOpenMg, v => Evaluation.KingAdjacentSemiOpenMg = v);
+        AddMg("QueenlessKingCenterMg", FeatQueenlessKingCenter, () => Evaluation.QueenlessKingCenterMg, v => Evaluation.QueenlessKingCenterMg = v);
+        AddMg("KnightOutpostMg", FeatKnightOutpost, () => Evaluation.KnightOutpostMg, v => Evaluation.KnightOutpostMg = v);
 
-        list.Add(new("KnightMobMg", MgKnightMob, () => KnightMobMg, v => KnightMobMg = v));
-        list.Add(new("KnightMobEg", EgKnightMob, () => KnightMobEg, v => KnightMobEg = v));
-        list.Add(new("KnightOutpostMg", MgKnightOutpost, () => KnightOutpostMg, v => KnightOutpostMg = v));
-
-        list.Add(new("BishopMobMg", MgBishopMob, () => BishopMobMg, v => BishopMobMg = v));
-        list.Add(new("BishopMobEg", EgBishopMob, () => BishopMobEg, v => BishopMobEg = v));
-        list.Add(new("BishopPairMg", MgBishopPair, () => BishopPairMg, v => BishopPairMg = v));
-        list.Add(new("BishopPairEg", EgBishopPair, () => BishopPairEg, v => BishopPairEg = v));
-
-        list.Add(new("RookSemiOpenMg", MgRookSemiOpen, () => RookSemiOpenMg, v => RookSemiOpenMg = v));
-        list.Add(new("RookSemiOpenEg", EgRookSemiOpen, () => RookSemiOpenEg, v => RookSemiOpenEg = v));
-        list.Add(new("RookOpenMg", MgRookOpen, () => RookOpenMg, v => RookOpenMg = v));
-        list.Add(new("RookOpenEg", EgRookOpen, () => RookOpenEg, v => RookOpenEg = v));
-
-        list.Add(new("KingOwnOpenMg", MgKingOwnOpen, () => KingOwnOpenMg, v => KingOwnOpenMg = v));
-        list.Add(new("KingOwnSemiOpenMg", MgKingOwnSemiOpen, () => KingOwnSemiOpenMg, v => KingOwnSemiOpenMg = v));
-        list.Add(new("KingAdjacentOpenMg", MgKingAdjOpen, () => KingAdjacentOpenMg, v => KingAdjacentOpenMg = v));
-        list.Add(new("KingAdjacentSemiOpenMg", MgKingAdjSemiOpen, () => KingAdjacentSemiOpenMg, v => KingAdjacentSemiOpenMg = v));
-
-        list.Add(new("QueenlessKingCenterMg", MgQueenlessCenter, () => QueenlessKingCenterMg, v => QueenlessKingCenterMg = v));
+        // TempoBonus is intentionally not tuned (it was set by SPRT).
 
         return list;
     }
 
     // =========================================================================
-    //  SECTION 5 — Dataset Loading & Feature Extraction
+    //  SECTION 4 — Dataset Loading & Feature Extraction
     // =========================================================================
 
-    // Parses the dataset, extracts features for every position, and returns
-    // Evaluate()'s score for each position (used only for verification).
-    private static int[] LoadAndExtract(string path)
+    private static bool LoadDataset(string path, List<Param> parameters)
     {
-        // Pass 1: parse lines so the column-major arrays can be sized exactly
-        List<string> fens = new();
-        List<double> results = new();
+        string[] lines = File.ReadAllLines(path);
+        int capacity = lines.Length;
 
-        foreach (string line in File.ReadLines(path))
+        results = new double[capacity];
+        mgScore = new int[capacity];
+        egScore = new int[capacity];
+        mgPhase = new int[capacity];
+        tempo = new int[capacity];
+        sqErr = new double[capacity];
+        coeffs = new short[FeatureCount][];
+        for (int f = 0; f < FeatureCount; f++)
+            coeffs[f] = new short[capacity];
+
+        int[] coeff = new int[FeatureCount];
+        positionCount = 0;
+
+        foreach (string line in lines)
         {
             if (string.IsNullOrWhiteSpace(line)) continue;
             int pipeIdx = line.IndexOf('|');
@@ -274,355 +268,249 @@ public static class Tuner
             string scoreStr = line[..pipeIdx].Trim();
             string fenStr = line[(pipeIdx + 1)..].Trim();
 
-            if (double.TryParse(scoreStr, NumberStyles.Float, CultureInfo.InvariantCulture, out double res))
+            if (!double.TryParse(scoreStr, NumberStyles.Float, CultureInfo.InvariantCulture, out double result))
+                continue;
+
+            Board.ParseFEN(fenStr);
+            ExtractFeatures(coeff, out int mgPst, out int egPst, out int phase);
+
+            // Starting score = fixed PST part + every weight times its coefficient.
+            int mg = mgPst, eg = egPst;
+            foreach (Param prm in parameters)
             {
-                fens.Add(fenStr);
-                results.Add(res);
+                int contribution = prm.Get() * coeff[prm.Feature];
+                if (prm.IsMg) mg += contribution; else eg += contribution;
             }
+
+            int i = positionCount;
+            results[i] = result;
+            mgScore[i] = mg;
+            egScore[i] = eg;
+            mgPhase[i] = Math.Min(phase, Evaluation.TotalPhase);
+            tempo[i] = side == White ? Evaluation.TempoBonus : -Evaluation.TempoBonus;
+            for (int f = 0; f < FeatureCount; f++)
+                coeffs[f][i] = checked((short)coeff[f]);
+
+            // Safety net: the cached score must equal the engine's score exactly.
+            int engineEval = Evaluation.Evaluate();
+            int engineWhite = side == White ? engineEval : -engineEval;
+            int cachedWhite = WhiteEval(i, mg, eg);
+
+            if (cachedWhite != engineWhite)
+            {
+                Console.WriteLine("[!] Error: Tuner features are out of sync with Evaluation.Evaluate().");
+                Console.WriteLine($"    FEN:    {fenStr}");
+                Console.WriteLine($"    Engine: {engineWhite} | Tuner: {cachedWhite}");
+                Console.WriteLine("    Update ExtractSide() / RegisterParameters() to match Evaluate().");
+                return false;
+            }
+
+            positionCount++;
         }
 
-        _count = fens.Count;
-        _result = results.ToArray();
-        _mgSum = new int[_count];
-        _egSum = new int[_count];
-        _phase = new byte[_count];
-        _stm = new sbyte[_count];
-        _coef = new short[FeatureCount][];
-        for (int f = 0; f < FeatureCount; f++)
-            _coef[f] = new short[_count];
-
-        // Pass 2: set up each position once, record Evaluate(), extract features
-        int[] refEval = new int[_count];
-        Span<int> c = stackalloc int[FeatureCount];
-
-        for (int i = 0; i < _count; i++)
+        if (positionCount == 0)
         {
-            ParseFEN(fens[i]);
-            refEval[i] = Evaluate();
-            ExtractPosition(i, c);
+            Console.WriteLine("[!] Error: No positions could be read (expected 'result | FEN' per line).");
+            return false;
         }
 
-        return refEval;
+        return true;
     }
 
-    // Mirrors Evaluate() term by term, but instead of multiplying by weights it
-    // records how many times each weight would be applied (the coefficient).
-    // PST values have no tunable weight, so they go straight into the constant.
-    private static void ExtractPosition(int i, Span<int> c)
+    // Fills `coeff` with (White count − Black count) for every feature, and
+    // returns the non-tunable parts: PST sums and game phase.
+    private static void ExtractFeatures(int[] coeff, out int mgPst, out int egPst, out int phase)
     {
-        c.Clear();
+        Array.Clear(coeff);
+        mgPst = 0;
+        egPst = 0;
+        phase = 0;
+
+        ExtractSide(true, coeff, ref mgPst, ref egPst, ref phase);
+        ExtractSide(false, coeff, ref mgPst, ref egPst, ref phase);
+    }
+
+    // Mirrors Evaluation.Evaluate() for one colour. Every block here has a
+    // matching block there; `sign` is +1 for White and -1 for Black.
+    private static void ExtractSide(bool isWhite, int[] coeff, ref int mgPst, ref int egPst, ref int phase)
+    {
+        int sign = isWhite ? +1 : -1;
+        int offset = isWhite ? 0 : 6;   // black piece index = white piece index + 6
 
         ulong[] bb = bitboards;
-        ulong[] occ = occupancies;
+        ulong ownPawns = bb[P + offset];
+        ulong enemyPawns = bb[isWhite ? p : P];
+        ulong allPawns = ownPawns | enemyPawns;
+        ulong ownOcc = occupancies[isWhite ? White : Black];
+        ulong allOcc = occupancies[Both];
 
-        ulong wP = bb[P], wN = bb[N], wB = bb[B], wR = bb[R], wQ = bb[Q], wK = bb[K];
-        ulong bP = bb[p], bN = bb[n], bBi = bb[b], bR = bb[r], bQ = bb[q], bK = bb[k];
-
-        ulong wOcc = occ[White];
-        ulong bOcc = occ[Black];
-        ulong allOcc = occ[Both];
-        ulong allPawns = wP | bP;
-
-        int pstMg = 0, pstEg = 0, phase = 0;
-
-        // ---- Pawns -----------------------------------------------------------
-        for (ulong x = wP; x != 0; x &= x - 1)
+        // --- Material count, PST and phase for every piece -------------------
+        for (int type = 0; type < 6; type++)
         {
-            int sq = TrailingZeroCount(x);
-            pstMg += MgPstSource[0][sq];
-            pstEg += EgPstSource[0][sq];
-            c[MgMat + 0]++; c[EgMat + 0]++;
-
-            if ((WhitePassedMask[sq] & bP) == 0)
+            for (ulong x = bb[type + offset]; x != 0; x &= x - 1)
             {
-                int rank = sq >> 3;
-                if ((uint)(rank - 1) < 6) { c[MgPassed + rank - 1]++; c[EgPassed + rank - 1]++; }
+                int sq = TrailingZeroCount(x);
+                int pstSq = isWhite ? sq : sq ^ 56;
+
+                mgPst += sign * Evaluation.MgPstSource[type][pstSq];
+                egPst += sign * Evaluation.EgPstSource[type][pstSq];
+                phase += PhaseWeight[type];
+
+                if (type < 5) coeff[FeatMaterial + type] += sign;   // king has no material value
             }
-            if ((AdjacentFiles[sq & 7] & wP) == 0) { c[MgIsolated]++; c[EgIsolated]++; }
         }
 
-        for (ulong x = bP; x != 0; x &= x - 1)
+        // --- Pawns: passed + isolated ----------------------------------------
+        for (ulong x = ownPawns; x != 0; x &= x - 1)
         {
             int sq = TrailingZeroCount(x);
-            pstMg -= MgPstSource[0][sq ^ 56];
-            pstEg -= EgPstSource[0][sq ^ 56];
-            c[MgMat + 0]--; c[EgMat + 0]--;
 
-            if ((BlackPassedMask[sq] & wP) == 0)
+            ulong passedMask = isWhite ? Evaluation.WhitePassedMask[sq] : Evaluation.BlackPassedMask[sq];
+            if ((passedMask & enemyPawns) == 0)
             {
-                int rank = 7 - (sq >> 3);
-                if ((uint)(rank - 1) < 6) { c[MgPassed + rank - 1]--; c[EgPassed + rank - 1]--; }
+                int rank = isWhite ? sq >> 3 : 7 - (sq >> 3);
+                coeff[FeatPassed + rank] += sign;
             }
-            if ((AdjacentFiles[sq & 7] & bP) == 0) { c[MgIsolated]--; c[EgIsolated]--; }
+
+            if ((Evaluation.AdjacentFiles[sq & 7] & ownPawns) == 0)
+                coeff[FeatIsolated] += sign;
         }
 
-        // ---- Knights ---------------------------------------------------------
-        for (ulong x = wN; x != 0; x &= x - 1)
+        // --- Knights: mobility + outpost -------------------------------------
+        for (ulong x = bb[N + offset]; x != 0; x &= x - 1)
         {
             int sq = TrailingZeroCount(x);
-            pstMg += MgPstSource[1][sq];
-            pstEg += EgPstSource[1][sq];
-            c[MgMat + 1]++; c[EgMat + 1]++;
-            phase += 1;
 
-            int mobility = PopCount(knightAttacks[sq] & ~wOcc) - KnightMobBase;
-            c[MgKnightMob] += mobility;
-            c[EgKnightMob] += mobility;
+            int mobility = PopCount(knightAttacks[sq] & ~ownOcc) - Evaluation.KnightMobBase;
+            coeff[FeatKnightMob] += sign * mobility;
 
             int rank = sq >> 3;
-            if ((uint)(rank - 2) <= 2
-                && (pawnAttacks[Black, sq] & wP) != 0
-                && (WhiteOutpostMask[sq] & bP) == 0)
+            int firstOutpostRank = isWhite ? 2 : 3;
+            ulong pawnDefenders = pawnAttacks[isWhite ? Black : White, sq] & ownPawns;
+            ulong outpostMask = isWhite ? Evaluation.WhiteOutpostMask[sq] : Evaluation.BlackOutpostMask[sq];
+
+            if ((uint)(rank - firstOutpostRank) <= 2
+                && pawnDefenders != 0
+                && (outpostMask & enemyPawns) == 0)
             {
-                c[MgKnightOutpost]++;
+                coeff[FeatKnightOutpost] += sign;
             }
         }
 
-        for (ulong x = bN; x != 0; x &= x - 1)
+        // --- Bishops: mobility + pair ----------------------------------------
+        int bishopCount = 0;
+        for (ulong x = bb[B + offset]; x != 0; x &= x - 1)
         {
             int sq = TrailingZeroCount(x);
-            pstMg -= MgPstSource[1][sq ^ 56];
-            pstEg -= EgPstSource[1][sq ^ 56];
-            c[MgMat + 1]--; c[EgMat + 1]--;
-            phase += 1;
+            bishopCount++;
 
-            int mobility = PopCount(knightAttacks[sq] & ~bOcc) - KnightMobBase;
-            c[MgKnightMob] -= mobility;
-            c[EgKnightMob] -= mobility;
-
-            int rank = sq >> 3;
-            if ((uint)(rank - 3) <= 2
-                && (pawnAttacks[White, sq] & bP) != 0
-                && (BlackOutpostMask[sq] & wP) == 0)
-            {
-                c[MgKnightOutpost]--;
-            }
+            int mobility = PopCount(GetBishopAttacks(sq, allOcc) & ~ownOcc) - Evaluation.BishopMobBase;
+            coeff[FeatBishopMob] += sign * mobility;
         }
+        if (bishopCount >= 2) coeff[FeatBishopPair] += sign;
 
-        // ---- Bishops ---------------------------------------------------------
-        int wBishopCount = 0;
-        for (ulong x = wB; x != 0; x &= x - 1)
+        // --- Rooks: open / semi-open file ------------------------------------
+        for (ulong x = bb[R + offset]; x != 0; x &= x - 1)
         {
-            int sq = TrailingZeroCount(x);
-            pstMg += MgPstSource[2][sq];
-            pstEg += EgPstSource[2][sq];
-            c[MgMat + 2]++; c[EgMat + 2]++;
-            phase += 1;
-            wBishopCount++;
+            ulong fileMask = Evaluation.FileMask[TrailingZeroCount(x) & 7];
+            if ((ownPawns & fileMask) != 0) continue;
 
-            int mobility = PopCount(GetBishopAttacks(sq, allOcc) & ~wOcc) - BishopMobBase;
-            c[MgBishopMob] += mobility;
-            c[EgBishopMob] += mobility;
-        }
-        if (wBishopCount >= 2) { c[MgBishopPair]++; c[EgBishopPair]++; }
-
-        int bBishopCount = 0;
-        for (ulong x = bBi; x != 0; x &= x - 1)
-        {
-            int sq = TrailingZeroCount(x);
-            pstMg -= MgPstSource[2][sq ^ 56];
-            pstEg -= EgPstSource[2][sq ^ 56];
-            c[MgMat + 2]--; c[EgMat + 2]--;
-            phase += 1;
-            bBishopCount++;
-
-            int mobility = PopCount(GetBishopAttacks(sq, allOcc) & ~bOcc) - BishopMobBase;
-            c[MgBishopMob] -= mobility;
-            c[EgBishopMob] -= mobility;
-        }
-        if (bBishopCount >= 2) { c[MgBishopPair]--; c[EgBishopPair]--; }
-
-        // ---- Rooks -----------------------------------------------------------
-        for (ulong x = wR; x != 0; x &= x - 1)
-        {
-            int sq = TrailingZeroCount(x);
-            pstMg += MgPstSource[3][sq];
-            pstEg += EgPstSource[3][sq];
-            c[MgMat + 3]++; c[EgMat + 3]++;
-            phase += 2;
-
-            ulong fileMask = FileMask[sq & 7];
-            if ((wP & fileMask) == 0)
-            {
-                if ((allPawns & fileMask) == 0) { c[MgRookOpen]++; c[EgRookOpen]++; }
-                else { c[MgRookSemiOpen]++; c[EgRookSemiOpen]++; }
-            }
+            coeff[(allPawns & fileMask) == 0 ? FeatRookOpen : FeatRookSemiOpen] += sign;
         }
 
-        for (ulong x = bR; x != 0; x &= x - 1)
-        {
-            int sq = TrailingZeroCount(x);
-            pstMg -= MgPstSource[3][sq ^ 56];
-            pstEg -= EgPstSource[3][sq ^ 56];
-            c[MgMat + 3]--; c[EgMat + 3]--;
-            phase += 2;
+        // --- King: file exposure + queenless centralisation ------------------
+        int kingSq = TrailingZeroCount(bb[K + offset]);
+        int kingFile = kingSq & 7;
 
-            ulong fileMask = FileMask[sq & 7];
-            if ((bP & fileMask) == 0)
-            {
-                if ((allPawns & fileMask) == 0) { c[MgRookOpen]--; c[EgRookOpen]--; }
-                else { c[MgRookSemiOpen]--; c[EgRookSemiOpen]--; }
-            }
-        }
+        AddKingFile(coeff, kingFile, ownPawns, allPawns, sign, FeatKingOwnOpen, FeatKingOwnSemiOpen);
+        if (kingFile > 0)
+            AddKingFile(coeff, kingFile - 1, ownPawns, allPawns, sign, FeatKingAdjacentOpen, FeatKingAdjacentSemiOpen);
+        if (kingFile < 7)
+            AddKingFile(coeff, kingFile + 1, ownPawns, allPawns, sign, FeatKingAdjacentOpen, FeatKingAdjacentSemiOpen);
 
-        // ---- Queens ----------------------------------------------------------
-        for (ulong x = wQ; x != 0; x &= x - 1)
-        {
-            int sq = TrailingZeroCount(x);
-            pstMg += MgPstSource[4][sq];
-            pstEg += EgPstSource[4][sq];
-            c[MgMat + 4]++; c[EgMat + 4]++;
-            phase += 4;
-        }
-
-        for (ulong x = bQ; x != 0; x &= x - 1)
-        {
-            int sq = TrailingZeroCount(x);
-            pstMg -= MgPstSource[4][sq ^ 56];
-            pstEg -= EgPstSource[4][sq ^ 56];
-            c[MgMat + 4]--; c[EgMat + 4]--;
-            phase += 4;
-        }
-
-        // ---- Kings -----------------------------------------------------------
-        int wkSq = TrailingZeroCount(wK);
-        int bkSq = TrailingZeroCount(bK);
-        pstMg += MgPstSource[5][wkSq] - MgPstSource[5][bkSq ^ 56];
-        pstEg += EgPstSource[5][wkSq] - EgPstSource[5][bkSq ^ 56];
-
-        KingFileCoefs(c, wkSq & 7, wP, allPawns, -1);
-        KingFileCoefs(c, bkSq & 7, bP, allPawns, +1);
-
-        if (wQ == 0 && bQ == 0)
-            c[MgQueenlessCenter] += KingCenterTable[wkSq] - KingCenterTable[bkSq];
-
-        // ---- Store -----------------------------------------------------------
-        _mgSum[i] = pstMg;                         // weights are added via ApplyDelta
-        _egSum[i] = pstEg;
-        _phase[i] = (byte)(phase > TotalPhase ? TotalPhase : phase);
-        _stm[i] = (sbyte)(side == White ? 1 : -1);
-
-        for (int f = 0; f < FeatureCount; f++)
-            _coef[f][i] = checked((short)c[f]);
+        if (bb[Q] == 0 && bb[q] == 0)
+            coeff[FeatQueenlessKingCenter] += sign * Evaluation.KingCenterTable[kingSq];
     }
 
-    // Same structure as Evaluation.ScoreKingFileExposure, recording coefficients.
-    private static void KingFileCoefs(Span<int> c, int kingFile, ulong friendlyPawns, ulong allPawns, int sign)
-    {
-        KingOneFile(c, kingFile, friendlyPawns, allPawns, sign, MgKingOwnOpen, MgKingOwnSemiOpen);
-        if (kingFile > 0) KingOneFile(c, kingFile - 1, friendlyPawns, allPawns, sign, MgKingAdjOpen, MgKingAdjSemiOpen);
-        if (kingFile < 7) KingOneFile(c, kingFile + 1, friendlyPawns, allPawns, sign, MgKingAdjOpen, MgKingAdjSemiOpen);
-    }
-
-    private static void KingOneFile(Span<int> c, int file, ulong friendlyPawns, ulong allPawns,
+    // King-file weights are penalties: Evaluate() subtracts them from the
+    // king's owner, so the coefficient is -sign.
+    private static void AddKingFile(int[] coeff, int file, ulong ownPawns, ulong allPawns,
         int sign, int openFeature, int semiOpenFeature)
     {
-        ulong mask = FileMask[file];
-        if ((friendlyPawns & mask) != 0) return;
-        c[(allPawns & mask) == 0 ? openFeature : semiOpenFeature] += sign;
+        ulong mask = Evaluation.FileMask[file];
+        if ((ownPawns & mask) != 0) return;
+
+        coeff[(allPawns & mask) == 0 ? openFeature : semiOpenFeature] -= sign;
     }
 
     // =========================================================================
-    //  SECTION 6 — Incremental Scoring & Loss
+    //  SECTION 5 — Score, Loss & K
     // =========================================================================
 
-    // Adds `delta × coef` of one feature to every position's mg or eg total.
-    // This is the only thing a ±1 tuning step has to do before measuring loss.
-    private static void ApplyDelta(int feature, int delta)
+    // Same tapering and tempo arithmetic as Evaluate(), from White's view.
+    private static int WhiteEval(int i, int mg, int eg)
     {
-        if (delta == 0) return;
-        short[] col = _coef[feature];
-        int[] sums = feature >= FirstEgFeature ? _egSum : _mgSum;
-        for (int i = 0; i < _count; i++)
-            sums[i] += delta * col[i];
+        int phase = mgPhase[i];
+        int score = (mg * phase + eg * (Evaluation.TotalPhase - phase)) / Evaluation.TotalPhase;
+        return score + tempo[i];
     }
 
-    // Identical arithmetic to the tail of Evaluate(), expressed from White's view:
-    //   Evaluate() = (stm == White ? score : -score) + Tempo
-    //   WhiteEval  = score + stm × Tempo
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static int WhiteEval(int i)
+    private static double SquaredError(int i, int mg, int eg)
     {
-        int ph = _phase[i];
-        int score = (_mgSum[i] * ph + _egSum[i] * (TotalPhase - ph)) / TotalPhase;
-        return score + _stm[i] * TempoBonus;
+        double predicted = 1.0 / (1.0 + Math.Exp(-sigmoidScale * WhiteEval(i, mg, eg)));
+        double diff = results[i] - predicted;
+        return diff * diff;
     }
 
-    private static int Verify(int[] refEval)
+    private static double MeanSquaredError()
     {
-        int mismatches = 0;
-        for (int i = 0; i < _count; i++)
-            if (_stm[i] * WhiteEval(i) != refEval[i]) mismatches++;
-        return mismatches;
+        double total = 0.0;
+        for (int i = 0; i < positionCount; i++)
+            total += sqErr[i];
+        return total / positionCount;
     }
 
+    // Sets K, recomputes every position's squared error, returns the MSE.
+    private static double RefreshErrors(double kValue)
+    {
+        sigmoidScale = kValue * Math.Log(10.0) / 400.0;
+
+        for (int i = 0; i < positionCount; i++)
+            sqErr[i] = SquaredError(i, mgScore[i], egScore[i]);
+
+        return MeanSquaredError();
+    }
+
+    // Coarse scan over the whole range, then a fine scan around the best value.
     private static double FindOptimalK()
     {
-        double bestK = 0.0035;
-        double minLoss = double.MaxValue;
+        double coarse = ScanK(KMin, KMax, 0.1);
+        return ScanK(Math.Max(KMin, coarse - 0.1), Math.Min(KMax, coarse + 0.1), 0.005);
+    }
 
-        for (double k = 0.0010; k <= 0.0100; k += 0.0001)
+    private static double ScanK(double from, double to, double step)
+    {
+        double bestK = from;
+        double bestLoss = double.MaxValue;
+        int stepCount = (int)Math.Round((to - from) / step);
+
+        for (int s = 0; s <= stepCount; s++)
         {
-            double loss = ComputeLoss(k);
-            if (loss < minLoss)
+            double candidate = from + s * step;
+            double loss = RefreshErrors(candidate);
+            if (loss < bestLoss)
             {
-                minLoss = loss;
-                bestK = k;
+                bestLoss = loss;
+                bestK = candidate;
             }
         }
 
         return bestK;
     }
 
-    // MSE between game result and sigmoid(eval). Each thread sums a fixed
-    // contiguous chunk in a fixed order, so the result is deterministic.
-    private static double ComputeLoss(double K)
-    {
-        double scale = -K * Ln10 / 400.0;
-        int threads = Environment.ProcessorCount;
-        double[] partial = new double[threads];
-        int n = _count;
-
-        Parallel.For(0, threads, t =>
-        {
-            int start = (int)((long)n * t / threads);
-            int end = (int)((long)n * (t + 1) / threads);
-            double sum = 0.0;
-
-            for (int i = start; i < end; i++)
-            {
-                double sigmoid = 1.0 / (1.0 + Math.Exp(WhiteEval(i) * scale));
-                double diff = _result[i] - sigmoid;
-                sum += diff * diff;
-            }
-
-            partial[t] = sum;
-        });
-
-        double total = 0.0;
-        for (int t = 0; t < threads; t++) total += partial[t];
-        return total / n;
-    }
-
     // =========================================================================
-    //  SECTION 7 — Output
+    //  SECTION 6 — Formatted Code Output
     // =========================================================================
-
-    private static void PrintChanges(List<Param> parameters, int[] initialWeights)
-    {
-        Console.WriteLine("\n=================================================");
-        Console.WriteLine("   Parameter Changes");
-        Console.WriteLine("=================================================");
-        Console.WriteLine($"{"Parameter",-26}{"Before",8}{"After",8}{"Delta",8}");
-
-        foreach (var prm in parameters)
-        {
-            int before = initialWeights[prm.Feature];
-            int after = _weights[prm.Feature];
-            if (before != after)
-                Console.WriteLine($"{prm.Name,-26}{before,8}{after,8}{after - before,8:+#;-#;0}");
-        }
-    }
 
     private static void PrintTunedCode(double initialLoss, double finalLoss)
     {
@@ -635,52 +523,53 @@ public static class Tuner
         Console.WriteLine("    //   0=Pawn  1=Knight  2=Bishop  3=Rook  4=Queen  5=King");
         Console.WriteLine("    // King is 0 because it's never captured; its \"value\" is implicit in game");
         Console.WriteLine("    // termination, not in evaluation.");
-        Console.WriteLine($"    public static int[] MgMaterial = [{string.Join(", ", MgMaterial)}];");
-        Console.WriteLine($"    public static int[] EgMaterial = [{string.Join(", ", EgMaterial)}];\n");
+        Console.WriteLine($"    public static int[] MgMaterial = [{string.Join(", ", Evaluation.MgMaterial)}];");
+        Console.WriteLine($"    public static int[] EgMaterial = [{string.Join(", ", Evaluation.EgMaterial)}];\n");
         Console.WriteLine("    // Starting position phase: 2 sides × (2×Knight + 2×Bishop + 2×Rook + 1×Queen)");
         Console.WriteLine("    //   = 2 × (2·1 + 2·1 + 2·2 + 1·4) = 24.");
         Console.WriteLine("    // Phase is accumulated inline during evaluation (Knight/Bishop += 1,");
         Console.WriteLine("    // Rook += 2, Queen += 4) rather than through a lookup table.");
-        Console.WriteLine("    private const int TotalPhase = 24;\n");
+        Console.WriteLine($"    internal const int TotalPhase = {Evaluation.TotalPhase};\n");
         Console.WriteLine("    #endregion\n");
 
         Console.WriteLine("    #region Positional Bonuses / Penalties\n");
         Console.WriteLine("    // Having both bishops is worth a small bonus because they cover");
         Console.WriteLine("    // complementary colour complexes.");
-        Console.WriteLine($"    public static int BishopPairMg = {BishopPairMg}, BishopPairEg = {BishopPairEg};\n");
+        Console.WriteLine($"    public static int BishopPairMg = {Evaluation.BishopPairMg}, BishopPairEg = {Evaluation.BishopPairEg};\n");
         Console.WriteLine("    // Mobility = (number of safe destination squares) − (a baseline).");
         Console.WriteLine("    // Subtracting a baseline keeps the \"average\" piece near zero so the");
         Console.WriteLine("    // mobility term doesn't silently inflate material values.");
-        Console.WriteLine($"    public static int KnightMobMg = {KnightMobMg}, KnightMobEg = {KnightMobEg}, KnightMobBase = {KnightMobBase};");
-        Console.WriteLine($"    public static int BishopMobMg = {BishopMobMg}, BishopMobEg = {BishopMobEg}, BishopMobBase = {BishopMobBase};\n");
+        Console.WriteLine($"    public static int KnightMobMg = {Evaluation.KnightMobMg}, KnightMobEg = {Evaluation.KnightMobEg}, KnightMobBase = {Evaluation.KnightMobBase};");
+        Console.WriteLine($"    public static int BishopMobMg = {Evaluation.BishopMobMg}, BishopMobEg = {Evaluation.BishopMobEg}, BishopMobBase = {Evaluation.BishopMobBase};\n");
         Console.WriteLine("    // Rook on a file with no friendly pawn:");
         Console.WriteLine("    //   semi-open = only enemy pawns on it (good attacking lane)");
         Console.WriteLine("    //   open      = no pawns at all (best — rook sees the whole file)");
-        Console.WriteLine($"    public static int RookSemiOpenMg = {RookSemiOpenMg}, RookSemiOpenEg = {RookSemiOpenEg};");
-        Console.WriteLine($"    public static int RookOpenMg = {RookOpenMg}, RookOpenEg = {RookOpenEg};\n");
-        Console.WriteLine("    // Passed pawn bonus indexed by \"distance from own back rank\" (0..7).");
+        Console.WriteLine($"    public static int RookSemiOpenMg = {Evaluation.RookSemiOpenMg}, RookSemiOpenEg = {Evaluation.RookSemiOpenEg};");
+        Console.WriteLine($"    public static int RookOpenMg = {Evaluation.RookOpenMg}, RookOpenEg = {Evaluation.RookOpenEg};\n");
+        Console.WriteLine("    // Passed pawn bonus indexed by squares left to promotion (0..7):");
+        Console.WriteLine("    //   index 1 = one step from promoting, index 6 = still on its start square.");
         Console.WriteLine("    // A pawn gets this if no enemy pawn can block or capture it on its way");
         Console.WriteLine("    // to promotion. The closer to promotion, the bigger the bonus — much");
         Console.WriteLine("    // larger in the endgame where promotion threats dominate.");
-        Console.WriteLine($"    public static int[] PassedMg = [{string.Join(", ", PassedMg)}];");
-        Console.WriteLine($"    public static int[] PassedEg = [{string.Join(", ", PassedEg)}];\n");
+        Console.WriteLine($"    public static int[] PassedMg = [{string.Join(", ", Evaluation.PassedMg)}];");
+        Console.WriteLine($"    public static int[] PassedEg = [{string.Join(", ", Evaluation.PassedEg)}];\n");
         Console.WriteLine("    // A pawn with no friendly pawn on either adjacent file. Weak because it");
         Console.WriteLine("    // can never be defended by another pawn.");
-        Console.WriteLine($"    public static int IsolatedMg = {IsolatedMg}, IsolatedEg = {IsolatedEg};\n");
+        Console.WriteLine($"    public static int IsolatedMg = {Evaluation.IsolatedMg}, IsolatedEg = {Evaluation.IsolatedEg};\n");
         Console.WriteLine("    // King safety: penalties for open/semi-open files near the king. Only");
         Console.WriteLine("    // applied in the middlegame — in the endgame the king wants to be active.");
-        Console.WriteLine($"    public static int KingOwnOpenMg = {KingOwnOpenMg}, KingOwnSemiOpenMg = {KingOwnSemiOpenMg};");
-        Console.WriteLine($"    public static int KingAdjacentOpenMg = {KingAdjacentOpenMg}, KingAdjacentSemiOpenMg = {KingAdjacentSemiOpenMg};\n");
+        Console.WriteLine($"    public static int KingOwnOpenMg = {Evaluation.KingOwnOpenMg}, KingOwnSemiOpenMg = {Evaluation.KingOwnSemiOpenMg};");
+        Console.WriteLine($"    public static int KingAdjacentOpenMg = {Evaluation.KingAdjacentOpenMg}, KingAdjacentSemiOpenMg = {Evaluation.KingAdjacentSemiOpenMg};\n");
         Console.WriteLine("    // Once both queens are gone, encourage the king toward the centre so it");
         Console.WriteLine("    // can help its pawns promote.");
-        Console.WriteLine($"    public static int QueenlessKingCenterMg = {QueenlessKingCenterMg};\n");
+        Console.WriteLine($"    public static int QueenlessKingCenterMg = {Evaluation.QueenlessKingCenterMg};\n");
         Console.WriteLine("    // Knight sitting on a square where:");
         Console.WriteLine("    //   • it's protected by a friendly pawn");
         Console.WriteLine("    //   • it can't be kicked by any enemy pawn on adjacent files");
         Console.WriteLine("    // Outposts are classical strong squares (think c5/d5/e5/f5 for White).");
-        Console.WriteLine($"    public static int KnightOutpostMg = {KnightOutpostMg};\n");
+        Console.WriteLine($"    public static int KnightOutpostMg = {Evaluation.KnightOutpostMg};\n");
         Console.WriteLine("    // Tempo bonus: static advantage awarded to the side to move");
-        Console.WriteLine("    private const int TempoBonus = 8;\n");
+        Console.WriteLine($"    internal const int TempoBonus = {Evaluation.TempoBonus};\n");
         Console.WriteLine("    #endregion");
 
         Console.WriteLine("\n=================================================");
