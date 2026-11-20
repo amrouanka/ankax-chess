@@ -40,9 +40,10 @@ public static class Evaluation
     //  Nothing in this section allocates at runtime; everything is a constant
     //  or a readonly array built once. Changing a number here is the only
     //  way to retune the evaluation — no logic needs to move.
-    //  When Texel Tuning:
+    //  Before Texel Tuning:
     //      - Change "private static readonly" to "public static" for arrays
     //      - Change "private const"           to "public static" for int
+    //  Don't forget to revert after Texel Tuning and before build
     // =========================================================================
 
     #region Material & Phase
