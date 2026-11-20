@@ -52,14 +52,14 @@ public static class Evaluation
     //   0=Pawn  1=Knight  2=Bishop  3=Rook  4=Queen  5=King
     // King is 0 because it's never captured; its "value" is implicit in game
     // termination, not in evaluation.
-    public static int[] MgMaterial = [82, 337, 365, 457, 1041, 0];
-    public static int[] EgMaterial = [90, 281, 297, 520, 940, 0];
+    public static int[] MgMaterial = [87, 347, 373, 462, 1043, 0];
+    public static int[] EgMaterial = [85, 275, 293, 517, 933, 0];
 
     // Starting position phase: 2 sides × (2×Knight + 2×Bishop + 2×Rook + 1×Queen)
     //   = 2 × (2·1 + 2·1 + 2·2 + 1·4) = 24.
     // Phase is accumulated inline during evaluation (Knight/Bishop += 1,
     // Rook += 2, Queen += 4) rather than through a lookup table.
-    private const int TotalPhase = 24;
+    internal const int TotalPhase = 24;
 
     #endregion
 
@@ -67,7 +67,7 @@ public static class Evaluation
 
     // Having both bishops is worth a small bonus because they cover
     // complementary colour complexes.
-    public static int BishopPairMg = 25, BishopPairEg = 49;
+    public static int BishopPairMg = 26, BishopPairEg = 46;
 
     // Mobility = (number of safe destination squares) − (a baseline).
     // Subtracting a baseline keeps the "average" piece near zero so the
@@ -78,37 +78,38 @@ public static class Evaluation
     // Rook on a file with no friendly pawn:
     //   semi-open = only enemy pawns on it (good attacking lane)
     //   open      = no pawns at all (best — rook sees the whole file)
-    public static int RookSemiOpenMg = 21, RookSemiOpenEg = 15;
-    public static int RookOpenMg = 54, RookOpenEg = 8;
+    public static int RookSemiOpenMg = 23, RookSemiOpenEg = 13;
+    public static int RookOpenMg = 60, RookOpenEg = 2;
 
-    // Passed pawn bonus indexed by "distance from own back rank" (0..7).
+    // Passed pawn bonus indexed by squares left to promotion (0..7):
+    //   index 1 = one step from promoting, index 6 = still on its start square.
     // A pawn gets this if no enemy pawn can block or capture it on its way
     // to promotion. The closer to promotion, the bigger the bonus — much
     // larger in the endgame where promotion threats dominate.
-    public static int[] PassedMg = [0, 0, 34, 14, 11, 11, 10, 0];
-    public static int[] PassedEg = [0, 48, 95, 52, 26, 7, 4, 0];
+    public static int[] PassedMg = [0, 1, 30, 12, 0, 4, 9, 0];
+    public static int[] PassedEg = [0, 52, 96, 54, 30, 11, 5, 0];
 
     // A pawn with no friendly pawn on either adjacent file. Weak because it
     // can never be defended by another pawn.
-    public static int IsolatedMg = -19, IsolatedEg = -8;
+    public static int IsolatedMg = -18, IsolatedEg = -9;
 
     // King safety: penalties for open/semi-open files near the king. Only
     // applied in the middlegame — in the endgame the king wants to be active.
-    public static int KingOwnOpenMg = 71, KingOwnSemiOpenMg = 18;
-    public static int KingAdjacentOpenMg = 37, KingAdjacentSemiOpenMg = 13;
+    public static int KingOwnOpenMg = 68, KingOwnSemiOpenMg = 18;
+    public static int KingAdjacentOpenMg = 34, KingAdjacentSemiOpenMg = 13;
 
     // Once both queens are gone, encourage the king toward the centre so it
     // can help its pawns promote.
-    public static int QueenlessKingCenterMg = 20;
+    public static int QueenlessKingCenterMg = 24;
 
     // Knight sitting on a square where:
     //   • it's protected by a friendly pawn
     //   • it can't be kicked by any enemy pawn on adjacent files
     // Outposts are classical strong squares (think c5/d5/e5/f5 for White).
-    public static int KnightOutpostMg = 46;
+    public static int KnightOutpostMg = 47;
 
     // Tempo bonus: static advantage awarded to the side to move
-    private const int TempoBonus = 8;
+    internal const int TempoBonus = 8;
 
     #endregion
 
@@ -125,7 +126,7 @@ public static class Evaluation
 
     #region PST Data
 
-    private static readonly int[][] MgPstSource =
+    internal static readonly int[][] MgPstSource =
     [
         // Pawn — the back rank is zero because pawns never stand there.
         [    0,   0,   0,   0,   0,   0,   0,   0,
@@ -183,7 +184,7 @@ public static class Evaluation
             10,  66,  44, -30,  32, -13,  50,  42 ],
     ];
 
-    private static readonly int[][] EgPstSource =
+    internal static readonly int[][] EgPstSource =
     [
         // Pawn — promotion race dominates; advanced pawns are huge.
         [    0,   0,   0,   0,   0,   0,   0,   0,
@@ -264,11 +265,11 @@ public static class Evaluation
 
     // File masks: all 8 squares of a given file set to 1.
     //   FileMask[0] = a-file, FileMask[7] = h-file.
-    private static readonly ulong[] FileMask = new ulong[8];
+    internal static readonly ulong[] FileMask = new ulong[8];
 
     // The union of the two files adjacent to a given file. Used for
     // isolated-pawn detection and for passed-pawn blockade lanes.
-    private static readonly ulong[] AdjacentFiles = new ulong[8];
+    internal static readonly ulong[] AdjacentFiles = new ulong[8];
 
     // "Does any enemy pawn stand in front of me, on my file or adjacent?"
     // If (PassedMask & enemyPawns) == 0 → this pawn is passed.
@@ -276,14 +277,14 @@ public static class Evaluation
     //   WhitePassedMask[sq] — squares strictly north of `sq` on the three
     //                        relevant files (own + both neighbours).
     //   BlackPassedMask[sq] — same, but strictly south.
-    private static readonly ulong[] WhitePassedMask = new ulong[64];
-    private static readonly ulong[] BlackPassedMask = new ulong[64];
+    internal static readonly ulong[] WhitePassedMask = new ulong[64];
+    internal static readonly ulong[] BlackPassedMask = new ulong[64];
 
     // Outpost masks mirror the passed-pawn idea, but only cover the two
     // adjacent files (an enemy pawn on our own file cannot kick us off the
     // outpost — it can only push past us). Used for knight outposts.
-    private static readonly ulong[] WhiteOutpostMask = new ulong[64];
-    private static readonly ulong[] BlackOutpostMask = new ulong[64];
+    internal static readonly ulong[] WhiteOutpostMask = new ulong[64];
+    internal static readonly ulong[] BlackOutpostMask = new ulong[64];
 
     // "How central is this square?" 0 at the rim, 3 at the four centre
     // squares. Used only when both queens are gone, to pull the king in.
@@ -298,7 +299,7 @@ public static class Evaluation
     //     0 1 2 2 2 2 1 0
     //     0 1 1 1 1 1 1 0
     //     0 0 0 0 0 0 0 0
-    private static readonly int[] KingCenterTable =
+    internal static readonly int[] KingCenterTable =
     [
         0, 0, 0, 0, 0, 0, 0, 0,
         0, 1, 1, 1, 1, 1, 1, 0,
