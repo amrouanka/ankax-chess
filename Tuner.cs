@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
+using System.Runtime.CompilerServices;
 using static System.Numerics.BitOperations;
 using static Board;
 using static MoveGenerator;
@@ -54,6 +55,7 @@ public static class Tuner
         public double[] GradEg { get; } = new double[featureCount];
         public double SquaredError;
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void Clear()
         {
             Array.Clear(GradMg);
@@ -133,6 +135,9 @@ public static class Tuner
         double[] gradEg = new double[TotalFeatures];
         object mergeLock = new();
 
+        // Persistent zero-allocation ThreadLocal pool across all epochs
+        using ThreadLocal<ThreadBuffer> threadBuffers = new(() => new ThreadBuffer(TotalFeatures), trackAllValues: true);
+
         Stopwatch epochSw = Stopwatch.StartNew();
         double currentMse = initialMse;
         double invN = 1.0 / positions.Length;
@@ -149,20 +154,43 @@ public static class Tuner
             Array.Clear(gradEg);
             double totalSquaredError = 0.0;
 
+            // Reset thread-local buffers at the start of the epoch
+            foreach (ThreadBuffer buf in threadBuffers.Values)
+            {
+                buf.Clear();
+            }
+
             Parallel.ForEach(
                 Partitioner.Create(0, positions.Length),
-                () => new ThreadBuffer(TotalFeatures),
+                () => threadBuffers.Value!,
                 (range, _, local) =>
                 {
-                    local.Clear();
                     for (int p = range.Item1; p < range.Item2; p++)
                     {
                         ref readonly PositionRecord pos = ref positions[p];
                         ReadOnlySpan<FeatureEntry> feats = features.AsSpan(pos.StartOffset, pos.Length);
 
                         double mg = 0.0, eg = 0.0;
-                        foreach (ref readonly FeatureEntry f in feats)
+                        int len = feats.Length;
+                        int i = 0;
+
+                        // 4x Loop Unrolling for ILP Pipelining
+                        for (; i <= len - 4; i += 4)
                         {
+                            ref readonly FeatureEntry f0 = ref feats[i];
+                            ref readonly FeatureEntry f1 = ref feats[i + 1];
+                            ref readonly FeatureEntry f2 = ref feats[i + 2];
+                            ref readonly FeatureEntry f3 = ref feats[i + 3];
+
+                            mg += weightsMg[f0.Index] * f0.Coeff + weightsMg[f1.Index] * f1.Coeff +
+                                  weightsMg[f2.Index] * f2.Coeff + weightsMg[f3.Index] * f3.Coeff;
+
+                            eg += weightsEg[f0.Index] * f0.Coeff + weightsEg[f1.Index] * f1.Coeff +
+                                  weightsEg[f2.Index] * f2.Coeff + weightsEg[f3.Index] * f3.Coeff;
+                        }
+                        for (; i < len; i++)
+                        {
+                            ref readonly FeatureEntry f = ref feats[i];
                             mg += weightsMg[f.Index] * f.Coeff;
                             eg += weightsEg[f.Index] * f.Coeff;
                         }
@@ -179,8 +207,27 @@ public static class Tuner
                         double mgGrad = baseGrad * mgW;
                         double egGrad = baseGrad * egW;
 
-                        foreach (ref readonly FeatureEntry f in feats)
+                        i = 0;
+                        for (; i <= len - 4; i += 4)
                         {
+                            ref readonly FeatureEntry f0 = ref feats[i];
+                            ref readonly FeatureEntry f1 = ref feats[i + 1];
+                            ref readonly FeatureEntry f2 = ref feats[i + 2];
+                            ref readonly FeatureEntry f3 = ref feats[i + 3];
+
+                            local.GradMg[f0.Index] += mgGrad * f0.Coeff;
+                            local.GradEg[f0.Index] += egGrad * f0.Coeff;
+                            local.GradMg[f1.Index] += mgGrad * f1.Coeff;
+                            local.GradEg[f1.Index] += egGrad * f1.Coeff;
+
+                            local.GradMg[f2.Index] += mgGrad * f2.Coeff;
+                            local.GradEg[f2.Index] += egGrad * f2.Coeff;
+                            local.GradMg[f3.Index] += mgGrad * f3.Coeff;
+                            local.GradEg[f3.Index] += egGrad * f3.Coeff;
+                        }
+                        for (; i < len; i++)
+                        {
+                            ref readonly FeatureEntry f = ref feats[i];
                             local.GradMg[f.Index] += mgGrad * f.Coeff;
                             local.GradEg[f.Index] += egGrad * f.Coeff;
                         }
@@ -198,6 +245,7 @@ public static class Tuner
                             gradEg[i] += local.GradEg[i];
                         }
                     }
+                    local.Clear();
                 });
 
             currentMse = totalSquaredError * invN;
@@ -253,7 +301,6 @@ public static class Tuner
 
             ParseFEN(fenPart);
 
-            // Safety check against malformed FEN lines
             if (bitboards[K] == 0 || bitboards[k] == 0)
                 continue;
 
@@ -290,7 +337,6 @@ public static class Tuner
 
     private static bool TryParseDatasetLine(string line, out string fen, out float whiteResult)
     {
-        // Primary format: "0.0 | r6r/n6p/6p1/1p3pb1/q7/P1B1kP1P/6P1/6K1 b - - 0 1"
         int pipeIdx = line.IndexOf('|');
         if (pipeIdx > 0)
         {
@@ -306,7 +352,6 @@ public static class Tuner
             return false;
         }
 
-        // Fallback EPD format: "<fen> c9 \"1-0\";"
         int c9Idx = line.IndexOf("c9", StringComparison.Ordinal);
         if (c9Idx > 0)
         {
@@ -327,7 +372,6 @@ public static class Tuner
 
     private static void ExtractFeatures(short[] counts)
     {
-        // All features extracted strictly from White's perspective (+White, -Black)
         ulong wP = bitboards[P], wN = bitboards[N], wB = bitboards[B], wR = bitboards[R], wQ = bitboards[Q], wK = bitboards[K];
         ulong bP = bitboards[p], bN = bitboards[n], bBi = bitboards[b], bR = bitboards[r], bQ = bitboards[q], bK = bitboards[k];
 
@@ -336,7 +380,6 @@ public static class Tuner
         ulong allOcc = occupancies[Both];
         ulong allPawns = wP | bP;
 
-        // 1. White & Black Pawns (PST + Passed + Isolated)
         for (ulong x = wP; x != 0; x &= x - 1)
         {
             int sq = TrailingZeroCount(x);
@@ -365,7 +408,6 @@ public static class Tuner
                 counts[IsoIdx] -= 1;
         }
 
-        // 2. White & Black Knights (PST + Mobility + Outposts)
         int kmDiff = 0;
         for (ulong x = wN; x != 0; x &= x - 1)
         {
@@ -400,7 +442,6 @@ public static class Tuner
         }
         counts[KmIdx] += (short)kmDiff;
 
-        // 3. White & Black Bishops (PST + Mobility + Bishop Pair)
         int bmDiff = 0;
         int wBishopCount = 0;
         for (ulong x = wB; x != 0; x &= x - 1)
@@ -423,7 +464,6 @@ public static class Tuner
         if (bBishopCount >= 2) counts[BpIdx] -= 1;
         counts[BmIdx] += (short)bmDiff;
 
-        // 4. White & Black Rooks (PST + Open / Semi-Open Files)
         for (ulong x = wR; x != 0; x &= x - 1)
         {
             int sq = TrailingZeroCount(x);
@@ -450,14 +490,12 @@ public static class Tuner
             }
         }
 
-        // 5. White & Black Queens (PST)
         for (ulong x = wQ; x != 0; x &= x - 1)
             counts[GetPstIndex(4, TrailingZeroCount(x))] += 1;
 
         for (ulong x = bQ; x != 0; x &= x - 1)
             counts[GetPstIndex(4, TrailingZeroCount(x) ^ 56)] -= 1;
 
-        // 6. White & Black Kings (PST + File Exposure + Queenless King Center)
         int wkSq = TrailingZeroCount(wK);
         int bkSq = TrailingZeroCount(bK);
         counts[GetPstIndex(5, wkSq)] += 1;
@@ -502,6 +540,7 @@ public static class Tuner
         }
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static int GetPstIndex(int piece, int square)
     {
         return piece switch
@@ -722,41 +761,128 @@ public static class Tuner
             passEg[d] = (int)Math.Round(wEg[PassedBaseIdx + d - 1]);
         }
 
+        string[] mgPieceComments =
+        [
+            "        // Pawn — the back rank is zero because pawns never stand there.",
+            "        // Knight — rim is dim; centre squares are prized.",
+            "        // Bishop — long diagonals and fianchetto squares.",
+            "        // Rook — likes the 7th rank and central files.",
+            "        // Queen — modest PST; mobility and tactics dominate its value.",
+            "        // King (middlegame) — castled corners are safe; the centre is fatal."
+        ];
+
+        string[] egPieceComments =
+        [
+            "        // Pawn — promotion race dominates; advanced pawns are huge.",
+            "        // Knight — still prefers the centre, but values are compressed.",
+            "        // Bishop — long diagonals remain preferable.",
+            "        // Rook — activity matters more than any one square.",
+            "        // Queen — rewards centralization in simplified positions.",
+            "        // King (endgame) — march to the centre to support pawns."
+        ];
+
         Console.WriteLine("\n===============================================================================");
-        Console.WriteLine("// Copy-Paste ready tuned parameters for Evaluation.cs:");
+        Console.WriteLine("// Ready to paste tuned parameters for Evaluation.cs:");
         Console.WriteLine("===============================================================================");
+        Console.WriteLine(); Console.WriteLine(); Console.WriteLine(); Console.WriteLine();
 
-        Console.WriteLine("    #region Material & Phase");
-        Console.WriteLine($"    public static int[] MgMaterial = [{tunedMgMat[0]}, {tunedMgMat[1]}, {tunedMgMat[2]}, {tunedMgMat[3]}, {tunedMgMat[4]}, 0];");
-        Console.WriteLine($"    public static int[] EgMaterial = [{tunedEgMat[0]}, {tunedEgMat[1]}, {tunedEgMat[2]}, {tunedEgMat[3]}, {tunedEgMat[4]}, 0];");
-        Console.WriteLine("    internal const int TotalPhase = 24;");
+        Console.WriteLine("    #region Material & Phase\n");
+
+        Console.WriteLine("    // Base material values in centipawns, indexed by piece type:");
+        Console.WriteLine("    //   0=Pawn  1=Knight  2=Bishop  3=Rook  4=Queen  5=King");
+        Console.WriteLine("    // King is 0 because it's never captured; its \"value\" is implicit in game");
+        Console.WriteLine("    // termination, not in evaluation.");
+        Console.WriteLine($"    private static readonly int[] MgMaterial = [{tunedMgMat[0]}, {tunedMgMat[1]}, {tunedMgMat[2]}, {tunedMgMat[3]}, {tunedMgMat[4]}, 0];");
+        Console.WriteLine($"    private static readonly int[] EgMaterial = [{tunedEgMat[0]}, {tunedEgMat[1]}, {tunedEgMat[2]}, {tunedEgMat[3]}, {tunedEgMat[4]}, 0];\n");
+
+        Console.WriteLine("    // Starting position phase: 2 sides × (2×Knight + 2×Bishop + 2×Rook + 1×Queen)");
+        Console.WriteLine("    //   = 2 × (2·1 + 2·1 + 2·2 + 1·4) = 24.");
+        Console.WriteLine("    // Phase is accumulated inline during evaluation (Knight/Bishop += 1,");
+        Console.WriteLine("    // Rook += 2, Queen += 4) rather than through a lookup table.");
+        Console.WriteLine("    internal const int TotalPhase = 24;\n");
+
         Console.WriteLine("    #endregion\n");
 
-        Console.WriteLine("    #region Positional Bonuses / Penalties");
-        Console.WriteLine($"    public static int BishopPairMg = {(int)Math.Round(wMg[BpIdx])}, BishopPairEg = {(int)Math.Round(wEg[BpIdx])};");
-        Console.WriteLine($"    public static int KnightMobMg = {(int)Math.Round(wMg[KmIdx])}, KnightMobEg = {(int)Math.Round(wEg[KmIdx])}, KnightMobBase = 4;");
-        Console.WriteLine($"    public static int BishopMobMg = {(int)Math.Round(wMg[BmIdx])}, BishopMobEg = {(int)Math.Round(wEg[BmIdx])}, BishopMobBase = 6;");
-        Console.WriteLine($"    public static int RookSemiOpenMg = {(int)Math.Round(wMg[RsoIdx])}, RookSemiOpenEg = {(int)Math.Round(wEg[RsoIdx])};");
-        Console.WriteLine($"    public static int RookOpenMg = {(int)Math.Round(wMg[RoIdx])}, RookOpenEg = {(int)Math.Round(wEg[RoIdx])};");
-        Console.WriteLine($"    public static int[] PassedMg = [{passMg[0]}, {passMg[1]}, {passMg[2]}, {passMg[3]}, {passMg[4]}, {passMg[5]}, {passMg[6]}, {passMg[7]}];");
-        Console.WriteLine($"    public static int[] PassedEg = [{passEg[0]}, {passEg[1]}, {passEg[2]}, {passEg[3]}, {passEg[4]}, {passEg[5]}, {passEg[6]}, {passEg[7]}];");
-        Console.WriteLine($"    public static int IsolatedMg = {(int)Math.Round(wMg[IsoIdx])}, IsolatedEg = {(int)Math.Round(wEg[IsoIdx])};");
-        Console.WriteLine($"    public static int KingOwnOpenMg = {(int)Math.Round(wMg[KooIdx])}, KingOwnSemiOpenMg = {(int)Math.Round(wMg[KosoIdx])};");
-        Console.WriteLine($"    public static int KingAdjacentOpenMg = {(int)Math.Round(wMg[KaoIdx])}, KingAdjacentSemiOpenMg = {(int)Math.Round(wMg[KasoIdx])};");
-        Console.WriteLine($"    public static int QueenlessKingCenterMg = {(int)Math.Round(wMg[QkcIdx])};");
-        Console.WriteLine($"    public static int KnightOutpostMg = {(int)Math.Round(wMg[KnoIdx])};");
-        Console.WriteLine($"    internal const int TempoBonus = {Evaluation.TempoBonus};");
+        Console.WriteLine("    #region Positional Bonuses / Penalties\n");
+
+        Console.WriteLine("    // Having both bishops is worth a small bonus because they cover");
+        Console.WriteLine("    // complementary colour complexes.");
+        Console.WriteLine($"    private const int BishopPairMg = {(int)Math.Round(wMg[BpIdx])}, BishopPairEg = {(int)Math.Round(wEg[BpIdx])};\n");
+
+        Console.WriteLine("    // Mobility = (number of safe destination squares) − (a baseline).");
+        Console.WriteLine("    // Subtracting a baseline keeps the \"average\" piece near zero so the");
+        Console.WriteLine("    // mobility term doesn't silently inflate material values.");
+        Console.WriteLine($"    private const int KnightMobMg = {(int)Math.Round(wMg[KmIdx])}, KnightMobEg = {(int)Math.Round(wEg[KmIdx])}, KnightMobBase = 4;");
+        Console.WriteLine($"    private const int BishopMobMg = {(int)Math.Round(wMg[BmIdx])}, BishopMobEg = {(int)Math.Round(wEg[BmIdx])}, BishopMobBase = 6;\n");
+
+        Console.WriteLine("    // Rook on a file with no friendly pawn:");
+        Console.WriteLine("    //   semi-open = only enemy pawns on it (good attacking lane)");
+        Console.WriteLine("    //   open      = no pawns at all (best — rook sees the whole file)");
+        Console.WriteLine($"    private const int RookSemiOpenMg = {(int)Math.Round(wMg[RsoIdx])}, RookSemiOpenEg = {(int)Math.Round(wEg[RsoIdx])};");
+        Console.WriteLine($"    private const int RookOpenMg = {(int)Math.Round(wMg[RoIdx])}, RookOpenEg = {(int)Math.Round(wEg[RoIdx])};\n");
+
+        Console.WriteLine("    // Passed pawn bonus indexed by squares left to promotion (0..7):");
+        Console.WriteLine("    //   index 1 = one step from promoting, index 6 = still on its start square.");
+        Console.WriteLine("    // A pawn gets this if no enemy pawn can block or capture it on its way");
+        Console.WriteLine("    // to promotion. The closer to promotion, the bigger the bonus — much");
+        Console.WriteLine("    // larger in the endgame where promotion threats dominate.");
+        Console.WriteLine($"    private static readonly int[] PassedMg = [{passMg[0]}, {passMg[1]}, {passMg[2]}, {passMg[3]}, {passMg[4]}, {passMg[5]}, {passMg[6]}, {passMg[7]}];");
+        Console.WriteLine($"    private static readonly int[] PassedEg = [{passEg[0]}, {passEg[1]}, {passEg[2]}, {passEg[3]}, {passEg[4]}, {passEg[5]}, {passEg[6]}, {passEg[7]}];\n");
+
+        Console.WriteLine("    // A pawn with no friendly pawn on either adjacent file. Weak because it");
+        Console.WriteLine("    // can never be defended by another pawn.");
+        Console.WriteLine($"    private const int IsolatedMg = {(int)Math.Round(wMg[IsoIdx])}, IsolatedEg = {(int)Math.Round(wEg[IsoIdx])};\n");
+
+        Console.WriteLine("    // King safety: penalties for open/semi-open files near the king. Only");
+        Console.WriteLine("    // applied in the middlegame — in the endgame the king wants to be active.");
+        Console.WriteLine($"    private const int KingOwnOpenMg = {(int)Math.Round(wMg[KooIdx])}, KingOwnSemiOpenMg = {(int)Math.Round(wMg[KosoIdx])};");
+        Console.WriteLine($"    private const int KingAdjacentOpenMg = {(int)Math.Round(wMg[KaoIdx])}, KingAdjacentSemiOpenMg = {(int)Math.Round(wMg[KasoIdx])};\n");
+
+        Console.WriteLine("    // Once both queens are gone, encourage the king toward the centre so it");
+        Console.WriteLine("    // can help its pawns promote.");
+        Console.WriteLine($"    private const int QueenlessKingCenterMg = {(int)Math.Round(wMg[QkcIdx])};\n");
+
+        Console.WriteLine("    // Knight sitting on a square where:");
+        Console.WriteLine("    //   • it's protected by a friendly pawn");
+        Console.WriteLine("    //   • it can't be kicked by any enemy pawn on adjacent files");
+        Console.WriteLine("    // Outposts are classical strong squares (think c5/d5/e5/f5 for White).");
+        Console.WriteLine($"    private const int KnightOutpostMg = {(int)Math.Round(wMg[KnoIdx])};\n");
+
+        Console.WriteLine("    // Tempo bonus: static advantage awarded to the side to move");
+        Console.WriteLine($"    internal const int TempoBonus = {Evaluation.TempoBonus};\n");
+
         Console.WriteLine("    #endregion\n");
 
+        Console.WriteLine("    // =========================================================================");
+        Console.WriteLine("    //  SECTION 2 — Piece–square tables (PeSTO)");
+        Console.WriteLine("    //");
+        Console.WriteLine("    //  One 64-entry table per piece type, written from White's perspective");
+        Console.WriteLine("    //  with square a8 at index 0 and h1 at index 63 — exactly matching the");
+        Console.WriteLine("    //  board's visual layout when you read top-to-bottom, left-to-right.");
+        Console.WriteLine("    //");
+        Console.WriteLine("    //  These are \"source\" tables. At startup we fold them with the material");
+        Console.WriteLine("    //  values into a single flat lookup (MgTable/EgTable) for fast access.");
+        Console.WriteLine("    // =========================================================================\n");
+
+        Console.WriteLine("    #region PST Data\n");
         Console.WriteLine("    internal static readonly int[][] MgPstSource =");
         Console.WriteLine("    [");
-        for (int pc = 0; pc < 6; pc++) PrintPstBlock(tunedMgPst[pc], pc < 5);
+        for (int pc = 0; pc < 6; pc++)
+        {
+            Console.WriteLine(mgPieceComments[pc]);
+            PrintPstBlock(tunedMgPst[pc], pc < 5);
+        }
         Console.WriteLine("    ];\n");
 
         Console.WriteLine("    internal static readonly int[][] EgPstSource =");
         Console.WriteLine("    [");
-        for (int pc = 0; pc < 6; pc++) PrintPstBlock(tunedEgPst[pc], pc < 5);
+        for (int pc = 0; pc < 6; pc++)
+        {
+            Console.WriteLine(egPieceComments[pc]);
+            PrintPstBlock(tunedEgPst[pc], pc < 5);
+        }
         Console.WriteLine("    ];");
+        Console.WriteLine("    #endregion");
         Console.WriteLine("===============================================================================");
     }
 
