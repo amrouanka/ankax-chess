@@ -232,8 +232,6 @@ public static class Tuner
         AddMg("QueenlessKingCenterMg", FeatQueenlessKingCenter, () => Evaluation.QueenlessKingCenterMg, v => Evaluation.QueenlessKingCenterMg = v);
         AddMg("KnightOutpostMg", FeatKnightOutpost, () => Evaluation.KnightOutpostMg, v => Evaluation.KnightOutpostMg = v);
 
-        // TempoBonus is intentionally not tuned (it was set by SPRT).
-
         return list;
     }
 
