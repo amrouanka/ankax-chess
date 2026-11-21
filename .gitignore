@@ -482,3 +482,8 @@ $RECYCLE.BIN/
 *.swp
 
 *.pgn
+
+releases/
+
+data/*
+!data/.gitkeep
