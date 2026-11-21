@@ -10,7 +10,8 @@ using static PieceAttacks;
 /// <summary>
 /// Ultra-fast Texel evaluation parameter tuner for AnkaX.
 /// Fits Material, Piece-Square Tables (PSTs), and Positional terms simultaneously
-/// using Sparse CSR features, multi-threaded Adam gradient descent, and Golden Section K fitting.
+/// using Sparse CSR features, multi-threaded Adam gradient descent with L2 regularization,
+/// Golden Section K fitting, and Blended Engine-Search Soft Targets.
 /// </summary>
 public static class Tuner
 {
@@ -40,13 +41,14 @@ public static class Tuner
     // 4 bytes per active feature
     public readonly record struct FeatureEntry(ushort Index, short Coeff);
 
-    // 12 bytes per position (zero padding)
+    // 14 bytes per position (zero padding)
     public readonly record struct PositionRecord(
         int StartOffset,
         ushort Length,
         byte Phase,
         sbyte StmSign, // +1 if White to move, -1 if Black to move
-        float Result   // White's result: 1.0f = White win, 0.5f = Draw, 0.0f = Black win
+        float Result,  // Game result: 1.0, 0.5, 0.0
+        short Eval     // Search evaluation in centipawns (STM relative)
     );
 
     private sealed class ThreadBuffer(int featureCount)
@@ -114,9 +116,9 @@ public static class Tuner
         // =========================================================================
         // UNCOMMENT THE TWO LINES BELOW FOR A 100% ZERO-BIAS (TABULA RASA) RUN:
         // =========================================================================
-        Array.Clear(initialMg);
-        Array.Clear(initialEg);
-        Console.WriteLine("[Zero-Bias] Wiped all initial weights to 0.0! Tuning from complete scratch...");
+        // Array.Clear(initialMg);
+        // Array.Clear(initialEg);
+        // Console.WriteLine("[Zero-Bias] Wiped all initial weights to 0.0! Tuning from complete scratch...");
         // =========================================================================
 
         // Re-compute initial MSE after potential zeroing so statistics are accurate
@@ -142,9 +144,7 @@ public static class Tuner
         const double initialLr = 0.4;
 
         // L2 Regularization factor (Weight Decay)
-        // Recommended starting values:
-        //   1e-4 (0.0001)  -> Strong penalty (smoothes PSTs aggressive, removes all spikes)
-        //   1e-5 (0.00001) -> Light penalty (preserves small positional nuances)
+        // 1e-5 (0.00001) -> Prevents PST outliers while preserving positional nuances
         const double lambda = 1e-5;
 
         double beta1T = 1.0;
@@ -224,7 +224,17 @@ public static class Tuner
                         double eval = (mg * mgW) + (eg * egW) + (pos.StmSign * Evaluation.TempoBonus);
 
                         double sigmoid = 1.0 / (1.0 + Math.Exp(-scale * eval));
-                        double diff = sigmoid - pos.Result;
+
+                        // Blend Game Result with Engine Search Soft-Target (if available)
+                        double targetResult = pos.Result;
+                        if (pos.Eval != 0)
+                        {
+                            double searchEvalWhite = pos.Eval * pos.StmSign;
+                            double evalTargetProb = 1.0 / (1.0 + Math.Exp(-scale * searchEvalWhite));
+                            targetResult = 0.5 * pos.Result + 0.5 * evalTargetProb;
+                        }
+
+                        double diff = sigmoid - targetResult;
                         local.SquaredError += diff * diff;
 
                         double baseGrad = 2.0 * scale * diff * sigmoid * (1.0 - sigmoid);
@@ -332,9 +342,9 @@ public static class Tuner
 
     private static (PositionRecord[] Positions, FeatureEntry[] Features, int[] ExpectedEvals) LoadDataset(string path)
     {
-        List<PositionRecord> posList = new(750_000);
-        List<FeatureEntry> featList = new(24_000_000);
-        List<int> evalList = new(750_000);
+        List<PositionRecord> posList = new(1_000_000);
+        List<FeatureEntry> featList = new(32_000_000);
+        List<int> evalList = new(1_000_000);
 
         short[] counts = new short[TotalFeatures];
 
@@ -342,7 +352,7 @@ public static class Tuner
         {
             if (string.IsNullOrWhiteSpace(rawLine)) continue;
 
-            if (!TryParseDatasetLine(rawLine, out string fenPart, out float whiteResult))
+            if (!TryParseDatasetLine(rawLine, out string fenPart, out float whiteResult, out short searchEval))
                 continue;
 
             ParseFEN(fenPart);
@@ -374,15 +384,47 @@ public static class Tuner
             byte phase = (byte)Math.Min(Evaluation.TotalPhase, phaseCount);
             sbyte stmSign = (sbyte)(side == White ? 1 : -1);
 
-            posList.Add(new PositionRecord(startOffset, activeCount, phase, stmSign, whiteResult));
+            posList.Add(new PositionRecord(startOffset, activeCount, phase, stmSign, whiteResult, searchEval));
             evalList.Add(Evaluation.Evaluate());
         }
 
         return (posList.ToArray(), featList.ToArray(), evalList.ToArray());
     }
 
-    private static bool TryParseDatasetLine(string line, out string fen, out float whiteResult)
+    private static bool TryParseDatasetLine(string line, out string fen, out float whiteResult, out short searchEval)
     {
+        fen = string.Empty;
+        whiteResult = 0.5f;
+        searchEval = 0;
+
+        int bracketStart = line.IndexOf('[');
+        int bracketEnd = line.IndexOf(']');
+
+        if (bracketStart != -1 && bracketEnd > bracketStart)
+        {
+            fen = line[..bracketStart].Trim();
+            string resStr = line.Substring(bracketStart + 1, bracketEnd - bracketStart - 1).Trim();
+
+            if (!float.TryParse(resStr, NumberStyles.Float, CultureInfo.InvariantCulture, out whiteResult))
+            {
+                if (resStr == "1-0" || resStr == "1.0") whiteResult = 1.0f;
+                else if (resStr == "0-1" || resStr == "0.0") whiteResult = 0.0f;
+                else if (resStr == "1/2-1/2" || resStr == "0.5") whiteResult = 0.5f;
+                else return false;
+            }
+
+            string remaining = line[(bracketEnd + 1)..].Trim();
+            if (!string.IsNullOrEmpty(remaining))
+            {
+                string[] parts = remaining.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length > 0 && short.TryParse(parts[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out short ev))
+                {
+                    searchEval = ev;
+                }
+            }
+            return true;
+        }
+
         int pipeIdx = line.IndexOf('|');
         if (pipeIdx > 0)
         {
@@ -411,8 +453,6 @@ public static class Tuner
             { whiteResult = 0.5f; return true; }
         }
 
-        fen = string.Empty;
-        whiteResult = 0.5f;
         return false;
     }
 
@@ -711,7 +751,17 @@ public static class Tuner
                     double eval = (mg * mgW) + (eg * egW) + (pos.StmSign * Evaluation.TempoBonus);
 
                     double sigmoid = 1.0 / (1.0 + Math.Exp(-scale * eval));
-                    double diff = sigmoid - pos.Result;
+
+                    // Blend Game Result with Engine Search Soft-Target (if available)
+                    double targetResult = pos.Result;
+                    if (pos.Eval != 0)
+                    {
+                        double searchEvalWhite = pos.Eval * pos.StmSign;
+                        double evalTargetProb = 1.0 / (1.0 + Math.Exp(-scale * searchEvalWhite));
+                        targetResult = 0.5 * pos.Result + 0.5 * evalTargetProb;
+                    }
+
+                    double diff = sigmoid - targetResult;
                     localErr += diff * diff;
                 }
                 return localErr;
