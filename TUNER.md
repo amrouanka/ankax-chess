@@ -1,361 +1,395 @@
-# AnkaX Texel Evaluation Tuner (`Tuner.cs`)
+# AnkaX Sparse Texel Tuner (`Tuner.cs`)
 
-## Technical Specification & Operational Manual
-
----
-
-## 1. Architectural Overview & Mathematical Foundations
-
-The **AnkaX Texel Tuner** is an ultra-fast, multi-threaded parameter optimization system built directly into the AnkaX chess engine. It utilizes the **Texel Tuning Method** (pioneered by Peter Österlund) to minimize the Mean Squared Error (MSE) between evaluation scores converted into win probabilities and the actual game outcomes of Millions of quiet positions.
-
-```
-       +-------------------------------------------------------+
-       |               Dataset (FEN + Outcome)                 |
-       +-------------------------------------------------------+
-                                   |
-                                   v
-       +-------------------------------------------------------+
-       |       Sparse Compressed Row Storage (CSR) Matrix       |
-       |             (386 Extracted Features/Pos)              |
-       +-------------------------------------------------------+
-                                   |
-                                   v
-       +-------------------------------------------------------+
-       |       Golden Section Search for Optimal K-Factor      |
-       +-------------------------------------------------------+
-                                   |
-                                   v
-       +-------------------------------------------------------+
-       |       Multi-Threaded Adam Gradient Descent Loop       |
-       |      (ThreadLocal<ThreadBuffer> Zero Allocation)      |
-       +-------------------------------------------------------+
-                                   |
-                                   v
-       +-------------------------------------------------------+
-       |       Formatted Output -> C# Code Copy-Paste          |
-       +-------------------------------------------------------+
-```
-
-### 1.1 The Evaluation Function & Phase Interpolation
-
-AnkaX uses a tapered evaluation system with two static evaluation vectors: **Middlegame (MG)** and **Endgame (EG)**. The evaluation score $S(p)$ for a position $p$ is calculated as a linear interpolation based on the game phase $\Phi(p) \in [0, 24]$:
-
-$$S(p) = \frac{\Phi(p) \cdot S_{\text{MG}}(p) + (24 - \Phi(p)) \cdot S_{\text{EG}}(p)}{24}$$
-
-Where $S_{\text{MG}}(p)$ and $S_{\text{EG}}(p)$ are calculated as dot-products between position feature vectors $\mathbf{f}(p)$ and weight vectors $\mathbf{w}_{\text{MG}}, \mathbf{w}_{\text{EG}}$:
-
-$$S_{\text{MG}}(p) = \mathbf{f}(p) \cdot \mathbf{w}_{\text{MG}}, \quad S_{\text{EG}}(p) = \mathbf{f}(p) \cdot \mathbf{w}_{\text{EG}}$$
-
-### 1.2 Sigmoid Win Probability Mapping & Objective Function
-
-To compare an evaluation score $S(p)$ (in centipawns) against a game result $R(p) \in \{1.0 \text{ (Win)}, 0.5 \text{ (Draw)}, 0.0 \text{ (Loss)}\}$, $S(p)$ is mapped to predicted win probability $P(p)$ via a custom Sigmoid function:
-
-$$P(p) = \frac{1}{1 + 10^{-K \cdot S(p) / 400}}$$
-
-The objective function to minimize is the Mean Squared Error ($\text{MSE}$) across $N$ positions in the training dataset:
-
-$$\text{MSE}(\mathbf{w}_{\text{MG}}, \mathbf{w}_{\text{EG}}) = \frac{1}{N} \sum_{i=1}^{N} \left( R_i - P(p_i) \right)^2$$
-
-### 1.3 Scaling Factor ($K$) Fitting via Golden Section Search
-
-The constant $K$ scales evaluation scores so that a given centipawn advantage accurately reflects win probability. Before optimizing weight vectors, $K$ is optimized using **Golden Section Search** over the interval $K \in [0.0001, 0.0100]$ until convergence ($\Delta K < 10^{-6}$).
-
-When zero-bias (Tabula Rasa) tuning is enabled, $K$ is optimized against initial baseline weights (e.g., PeSTO) **before** weight zeroing. This ensures $K$ is calibrated on meaningful evaluation gradients rather than flat $0.0$ scores.
-
-### 1.4 Adam Gradient Optimization
-
-The tuner uses the **Adam (Adaptive Moment Estimation)** algorithm to update weights. For each weight parameter $w_j$ (both MG and EG), first-moment estimates $m_j$ (mean) and second-moment estimates $v_j$ (uncentered variance) are maintained:
-
-1. **Gradient Compute**:
-   $$\frac{\partial \text{MSE}}{\partial w_{j, \text{MG}}} = \frac{-2}{N} \sum_{i=1}^{N} \left( R_i - P(p_i) \right) \cdot P(p_i)(1 - P(p_i)) \cdot \ln(10) \cdot \frac{K}{400} \cdot \left( \frac{\Phi(p_i)}{24} \right) \cdot f_j(p_i)$$
-
-   $$\frac{\partial \text{MSE}}{\partial w_{j, \text{EG}}} = \frac{-2}{N} \sum_{i=1}^{N} \left( R_i - P(p_i) \right) \cdot P(p_i)(1 - P(p_i)) \cdot \ln(10) \cdot \frac{K}{400} \cdot \left( \frac{24 - \Phi(p_i)}{24} \right) \cdot f_j(p_i)$$
-
-2. **Adam Update Steps**:
-   $$m_t = \beta_1 m_{t-1} + (1 - \beta_1) g_t$$
-   $$v_t = \beta_2 v_{t-1} + (1 - \beta_2) g_t^2$$
-   $$\hat{m}_t = \frac{m_t}{1 - \beta_1^t}, \quad \hat{v}_t = \frac{v_t}{1 - \beta_2^t}$$
-   $$w_t = w_{t-1} - \frac{\alpha_t}{\sqrt{\hat{v}_t} + \epsilon} \hat{m}_t$$
-
-   *Hyperparameters*: $\beta_1 = 0.9$, $\beta_2 = 0.999$, $\epsilon = 10^{-8}$, initial learning rate $\alpha_0 = 0.4$ with epoch decay $\alpha_t = \frac{\alpha_0}{1 + 0.0005 \cdot t}$.
+The **AnkaX Sparse Texel Tuner** is a high-performance, multi-threaded supervised learning pipeline built directly into the AnkaX chess engine. It optimizes all **767 independent evaluation parameters** (387 Middlegame and 380 Endgame weights) simultaneously by minimizing the Mean Squared Error (MSE) between the engine's static evaluation win-probability predictions and resolved game outcomes blended with deep search evaluations.
 
 ---
 
-## 2. Feature Space Architecture (386 Features)
+## Table of Contents
 
-AnkaX extracts 386 distinct feature indices per position. Indices $0..379$ contain both Middlegame (MG) and Endgame (EG) parameters. Indices $380..385$ represent King Safety attacks and are **Middlegame-Only** (indicated by `KooIdx = 380`).
-
-| Feature Index Range | Feature Description | Parameter Count | Weight Type |
-| :--- | :--- | :---: | :---: |
-| `0 .. 47` | Pawn Piece-Square Table (Ranks 2 to 7, Squares 8..55) | 48 | MG & EG |
-| `48 .. 111` | Knight Piece-Square Table (Squares 0..63) | 64 | MG & EG |
-| `112 .. 175` | Bishop Piece-Square Table (Squares 0..63) | 64 | MG & EG |
-| `176 .. 239` | Rook Piece-Square Table (Squares 0..63) | 64 | MG & EG |
-| `240 .. 303` | Queen Piece-Square Table (Squares 0..63) | 64 | MG & EG |
-| `304 .. 367` | King Piece-Square Table (Squares 0..63) | 64 | MG & EG |
-| `368` (`BpIdx`) | Bishop Pair Bonus | 1 | MG & EG |
-| `369` (`KmIdx`) | Knight Mobility (per legal move) | 1 | MG & EG |
-| `370` (`BmIdx`) | Bishop Mobility (per legal move) | 1 | MG & EG |
-| `371` (`RsoIdx`) | Rook on Semi-Open File | 1 | MG & EG |
-| `372` (`RoIdx`) | Rook on Open File | 1 | MG & EG |
-| `373 .. 378` (`PassedBaseIdx`) | Passed Pawn Bonuses (Ranks 1 to 6) | 6 | MG & EG |
-| `379` (`IsoIdx`) | Isolated Pawn Penalty | 1 | MG & EG |
-| `380` (`KooIdx`) | King Attackers Outer Shield | 1 | **MG Only** |
-| `381` (`KosoIdx`) | King Attackers Semi-Outer Shield | 1 | **MG Only** |
-| `382` (`KaoIdx`) | King Attackers Inner Ring | 1 | **MG Only** |
-| `383` (`KasoIdx`) | King Attackers Semi-Inner Ring | 1 | **MG Only** |
-| `384` (`QkcIdx`) | Queen Check Threat | 1 | **MG Only** |
-| `385` (`KnoIdx`) | Knight Check Threat | 1 | **MG Only** |
+1. [Architecture & Performance Highlights](#1-architecture--performance-highlights)
+2. [Command-Line Usage & Tuning Modes](#2-command-line-usage--tuning-modes)
+3. [Supported Dataset Formats](#3-supported-dataset-formats)
+4. [Feature Map & Parameter Layout](#4-feature-map--parameter-layout)
+5. [Mathematical Formulation](#5-mathematical-formulation)
+6. [Engineering Safeguards & Invariants](#6-engineering-safeguards--invariants)
+7. [Material & PST Post-Processing Decomposition](#7-material--pst-post-processing-decomposition)
+8. [Integration with `Evaluation.cs` (SWAR Packing)](#8-integration-with-evaluationcs-swar-packing)
+9. [Standard Tuning & SPRT Workflow](#9-standard-tuning--sprt-workflow)
+10. [How to Add a New Evaluation Term](#10-how-to-add-a-new-evaluation-term)
 
 ---
 
-## 3. High-Performance CSR Engine Implementation
+## 1. Architecture & Performance Highlights
 
-To process millions of positions per second without garbage collection overhead, the tuner uses a **Compressed Sparse Row (CSR)** matrix format paired with pooled thread buffers.
+Chess positions are inherently sparse: out of **387** possible evaluation features, a typical chess position activates only **~18.9 non-zero features** (`< 5%` density). `Tuner.cs` exploits this sparsity and modern CPU hardware through five core mechanisms:
 
+* **Compressed Sparse Row (CSR) Storage:**
+  During dataset loading, every position is parsed once into a flat, contiguous array of `FeatureEntry(ushort Index, short Coeff)` records (4 bytes per active feature) indexed by compact `PositionRecord` headers (12 bytes per position). For 10 million positions (~189 million active entries), the entire dataset fits comfortably in ~880 MB of RAM with linear cache-friendly traversal.
+* **SIMD Dual-Lane `Vector128<double>` Execution:**
+  Every feature weight, gradient, and Adam moment is stored as a 128-bit hardware vector (`Vector128.Create(mg, eg)`). Middlegame (lane 0) and Endgame (lane 1) evaluations, gradients, and parameter updates execute in parallel in a single SIMD instruction stream.
+* **4-Way Loop Unrolling & Pointer Arithmetic:**
+  The hot forward and backward passes bypass C# array bounds checking via `MemoryMarshal.GetArrayDataReference` and `Unsafe.Add`, using dual accumulators (`sum0`, `sum1`) unrolled 4 entries per iteration to break CPU dependency chains.
+* **Lock-Free Multi-Threaded Map-Reduce:**
+  Positions are statically partitioned across `Environment.ProcessorCount` worker threads. Each thread accumulates squared error and feature gradients into its own isolated `ThreadBuffer` with zero lock contention or false sharing, followed by a fast vector reduction across the 387 features at the end of each epoch.
+* **Throughput:**
+  Processes **~10,000,000 positions (~189,000,000 active features) in ~410 ms per epoch** on a 4-core CPU, converging a full fresh tune in ~3.5 minutes.
+
+---
+
+## 2. Command-Line Usage & Tuning Modes
+
+### Syntax
+
+```powershell
+dotnet run -c Release -- tune <dataset-path> [maxEpochs] [--fresh]
 ```
-CSR Array Structure:
-RowPointers:    [ 0,       12,       25,       37, ... ]  (Position boundaries)
-FeatureIndices: [ 12, 54, 368, 14, 58, 370, ... ]         (Sparse active feature IDs)
-FeatureValues:  [  1, -1,   1,  1,  1,  -2, ... ]         (Feature scalar values)
+
+### Arguments
+
+| Argument | Default | Description |
+| :--- | :--- | :--- |
+| `<dataset-path>` | *(Required)* | Path to the training book/EPD/FEN file. |
+| `[maxEpochs]` | `20000` | Maximum number of Adam epochs before forced termination. |
+| `--fresh` *(aliases: `-f`, `--reset`, `--pesto`)* | `false` | Forces a clean reset to the official PeSTO baseline. |
+
+### Mode 1: Fresh Baseline Tune (`--fresh`)
+
+```powershell
+dotnet run -c Release -- tune data/E12.52-1M-D12-Resolved.book --fresh
 ```
 
-### 3.1 Memory Layout
+* **Initial Weights:** Initializes Material and Piece-Square Tables (PSTs) from the immutable `OfficialMgMaterial`, `OfficialEgMaterial`, `OfficialMgPst`, and `OfficialEgPst` arrays embedded inside `Tuner.cs`. All secondary positional bonuses/penalties and `TempoBonus` start at `0`.
+* **Initial Learning Rate:** `1.0` (decays via `LR = 1.0 / (1.0 + 0.005 * epoch)`).
+* **When to Use:**
+  * Performing a full periodic re-tune (e.g., weekly/monthly) after accumulating a large collection of new self-play games.
+  * Recovering from corrupted or mis-scaled weights in `Evaluation.cs`.
+  * Establishing a clean baseline after major structural changes to the evaluation function.
+
+### Mode 2: Incremental Tune (Default)
+
+```powershell
+dotnet run -c Release -- tune data/new_games_batch.book
+```
+
+* **Initial Weights:** Warm-starts directly from the current constants and tables compiled in `Evaluation.cs` (`GetCurrentEvaluationWeights()`).
+* **Initial Learning Rate:** `0.25` (decays via `LR = 0.25 / (1.0 + 0.005 * epoch)`).
+* **When to Use:**
+  * Fine-tuning existing weights when a **new dataset** of games becomes available.
+  * Tuning a **newly added evaluation term** without having to re-learn all existing PSTs from scratch.
+  * Running a quick `Ctrl+C` startup check to verify that `Tuner.cs` and `Evaluation.cs` match 100% across the dataset.
+
+> **Important:** Do not run Incremental Mode repeatedly back-to-back on the *same* dataset file after a tune has already converged. Once the common features have converged on a dataset, forcing additional epochs only chases statistical noise on rarely visited squares.
+
+### Graceful `Ctrl+C` Interruption
+
+Pressing `Ctrl+C` at any point during step `[4/4]` does **not** abort the process or lose progress. The `Console.CancelKeyPress` handler intercepts the signal, finishes the current epoch (~0.4s), prints the best MSE achieved so far, and outputs the full formatted C# code for `bestWeights`.
+
+---
+
+## 3. Supported Dataset Formats
+
+`TryParseDatasetLine` automatically detects and parses three standard quiet-position dataset formats:
+
+1. **Bracketed Result with Optional Search Score (Recommended):**
+
+   ```text
+   rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1 [0.5] 18
+   r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 2 3 [1.0] +42
+   r1bqk2r/pppp1ppp/2n2n2/2b1p3/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 4 4 [0-1] -35
+   ```
+
+   * The value inside `[...]` is the game outcome from **White's perspective** (`1.0` / `1-0` = White win, `0.5` / `1/2-1/2` = Draw, `0.0` / `0-1` = Black win, or any continuous float in `[0.0, 1.0]`).
+   * The integer after `]` (if present and non-zero) is the search evaluation in centipawns from the **side-to-move's perspective** (`pos.Eval`).
+
+2. **Pipe-Delimited Format:**
+
+   ```text
+   1.0 | rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1
+   0.5 | r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 2 3
+   ```
+
+3. **Standard EPD `c9` Comment Format:**
+
+   ```text
+   rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1 c9 "1/2-1/2";
+   ```
+
+### Automatic Sanity Filtering
+
+During `LoadDataset`, any malformed line or illegal board state is automatically skipped if:
+
+* `PopCount(bitboards[K]) != 1` or `PopCount(bitboards[k]) != 1` (missing or multiple kings).
+* `((bitboards[P] | bitboards[p]) & 0xFF000000000000FFUL) != 0` (pawns on the 1st or 8th rank).
+
+---
+
+## 4. Feature Map & Parameter Layout
+
+`Tuner.cs` defines `TotalFeatures = 387`. Each feature index $i \in [0, 386]$ holds a `Vector128<double>` containing `(MG_Weight, EG_Weight)`. Because 6 features (`380..385`) are Middlegame-only and 1 feature (`386`, Tempo) is phase-independent, there are **$387 \text{ MG} + 380 \text{ EG} = 767$** independent scalar weights.
+
+### Square Indexing Convention
+
+AnkaX uses big-endian rank-file indexing where **`a8 = 0`**, **`h8 = 7`**, **`a1 = 56`**, and **`h1 = 63`**:
+
+* `rank = sq >> 3` (`0` = 8th rank, `1` = 7th rank, ..., `6` = 2nd rank, `7` = 1st rank).
+* `file = sq & 7` (`0` = a-file, ..., `7` = h-file).
+* Black pieces mirror their square vertically via `sq ^ 56`.
+
+### Complete Feature Table
+
+| Feature Index | Constant Name | Count | Phase Mode | Coefficient $x_i$ (White $-$ Black) |
+| :--- | :--- | :--- | :--- | :--- |
+| `0 .. 47` | *(Pawn PST)* | 48 | MG + EG | White pawn on `sq` ($+1$) minus Black pawn on `sq ^ 56` ($-1$), for `sq` $\in [8, 55]$ (`index = sq - 8`). *(Note: `373` is frozen and decomposed into `8..15` post-tune).* |
+| `48 .. 111` | *(Knight PST)* | 64 | MG + EG | White knight on `sq` ($+1$) minus Black knight on `sq ^ 56` ($-1$) (`index = 48 + sq`). |
+| `112 .. 175` | *(Bishop PST)* | 64 | MG + EG | White bishop on `sq` ($+1$) minus Black bishop on `sq ^ 56` ($-1$) (`index = 112 + sq`). |
+| `176 .. 239` | *(Rook PST)* | 64 | MG + EG | White rook on `sq` ($+1$) minus Black rook on `sq ^ 56` ($-1$) (`index = 176 + sq`). |
+| `240 .. 303` | *(Queen PST)* | 64 | MG + EG | White queen on `sq` ($+1$) minus Black queen on `sq ^ 56` ($-1$) (`index = 240 + sq`). |
+| `304 .. 367` | *(King PST)* | 64 | MG + EG | White king on `sq` ($+1$) minus Black king on `sq ^ 56` ($-1$) (`index = 304 + sq`). |
+| `368` | `BpIdx` | 1 | MG + EG | Bishop pair indicator: $+1$ if White has $\ge 2$ bishops, $-1$ if Black has $\ge 2$ bishops. |
+| `369` | `KmIdx` | 1 | MG + EG | Net Knight mobility above baseline (`PopCount(attacks & ~friendlyOcc) - 4`). |
+| `370` | `BmIdx` | 1 | MG + EG | Net Bishop mobility above baseline (`PopCount(attacks & ~friendlyOcc) - 6`). |
+| `371` | `RsoIdx` | 1 | MG + EG | Net Rooks on semi-open files (no friendly pawns, $\ge 1$ enemy pawn on file). |
+| `372` | `RoIdx` | 1 | MG + EG | Net Rooks on open files (no pawns of either color on file). |
+| `373 .. 378` | `PassedBaseIdx + d - 1` | 6 | MG + EG | Net Passed Pawns at rank distance $d \in [1, 6]$ from promotion (`373` is frozen during Adam and decomposed post-tune). |
+| `379` | `IsoIdx` | 1 | MG + EG | Net Isolated Pawns (no friendly pawns on adjacent files). |
+| `380` | `KooIdx` | 1 | **MG-Only** | King on own open file penalty (`-1` if White king file open, `+1` if Black king file open). |
+| `381` | `KosoIdx` | 1 | **MG-Only** | King on own semi-open file penalty (`-1` for White, `+1` for Black). |
+| `382` | `KaoIdx` | 1 | **MG-Only** | King adjacent open file penalty (`-1` per open adjacent file for White, `+1` for Black). |
+| `383` | `KasoIdx` | 1 | **MG-Only** | King adjacent semi-open file penalty (`-1` per semi-open adjacent file for White, `+1` for Black). |
+| `384` | `QkcIdx` | 1 | **MG-Only** | Queenless king centralization (`KingCenterTable[wkSq] - KingCenterTable[bkSq]` when `wQ \| bQ == 0`). |
+| `385` | `KnoIdx` | 1 | **MG-Only** | Net Knights on outposts (ranks 4–6, defended by friendly pawn, no enemy pawn on adjacent files ahead). |
+| `386` | `TempoIdx` | 1 | **Phase-Indep.** | Side-to-move bonus (`+1` if White to move, `-1` if Black to move). |
+
+---
+
+## 5. Mathematical Formulation
+
+### 5.1 Tapered Evaluation Model
+
+For each position $p$, the game phase $\phi_p \in [0, 24]$ is computed from non-pawn material:
+
+$$\phi_p = \min\Big(24,\; N_{\text{knights}} + N_{\text{bishops}} + 2 N_{\text{rooks}} + 4 N_{\text{queens}}\Big)$$
+
+Let $\mathbf{w}_{\text{ phase}}(\phi_p) = \left[\frac{\phi_p}{24},\; \frac{24 - \phi_p}{24}\right]^T$ be the precomputed phase weight vector (`PhaseWeights[pos.Phase]`). The continuous White-perspective linear evaluation $E_p$ is the dot product of the accumulated feature sum and the phase weights:
+
+$$\mathbf{S}_p = \begin{bmatrix} S_{p,\text{MG}} \\ S_{p,\text{EG}} \end{bmatrix} = \sum_{(i, c) \in \text{CSR}(p)} c \cdot \begin{bmatrix} w_{i,\text{MG}} \\ w_{i,\text{EG}} \end{bmatrix}, \qquad E_p = \mathbf{S}_p \cdot \mathbf{w}_{\text{phase}}(\phi_p)$$
+
+### 5.2 Win-Probability Sigmoid & Target Blending
+
+The evaluation $E_p$ is mapped to a win probability $\hat{y}_p \in (0, 1)$ via a logistic sigmoid scaled by constant $K$:
+
+$$s = \frac{K \ln(10)}{400}, \qquad \hat{y}_p = \sigma(s \cdot E_p) = \frac{1}{1 + e^{-s E_p}}$$
+
+To reduce variance from tactical blunders or endgame accidents in fast self-play games, the training target $y_p$ blends the game outcome $R_p \in \{0.0, 0.5, 1.0\}$ with the dataset's search evaluation $E_{p,\text{search}}$ (converted to White's perspective via $\text{StmSign}_p$) whenever a non-zero search score is present:
+
+$$y_p = \begin{cases} 0.5 \cdot R_p + 0.5 \cdot \sigma\left(s \cdot \text{StmSign}_p \cdot E_{p,\text{search}}\right) & \text{if } E_{p,\text{search}} \neq 0 \\ R_p & \text{if } E_{p,\text{search}} = 0 \end{cases}$$
+
+### 5.3 Objective Function & Analytical Gradients
+
+The tuner minimizes the Mean Squared Error across all $N$ positions:
+
+$$\mathcal{L}(\mathbf{W}) = \frac{1}{N} \sum_{p=1}^{N} \left(\hat{y}_p - y_p\right)^2$$
+
+By the chain rule, using $\frac{d\sigma(z)}{dz} = \sigma(z)\left(1 - \sigma(z)\right)$, the partial derivative with respect to feature $i$'s MG and EG weights for position $p$ is:
+
+$$\delta_p = 2 s \left(\hat{y}_p - y_p\right) \hat{y}_p \left(1 - \hat{y}_p\right)$$
+
+$$\nabla_{\mathbf{w}_i} \mathcal{L}_p = c_{p,i} \cdot \delta_p \cdot \begin{bmatrix} \frac{\phi_p}{24} \\[4pt] \frac{24 - \phi_p}{24} \end{bmatrix}$$
+
+### 5.4 Multi-Threaded Adam Update Rule
+
+At each epoch $t$, the global gradient $\mathbf{g}_i = \frac{1}{N} \sum_{p=1}^N \nabla_{\mathbf{w}_i} \mathcal{L}_p$ updates first and second moment vectors $\mathbf{m}_i, \mathbf{v}_i \in \mathbb{R}^2$ (`beta1 = 0.9`, `beta2 = 0.999`, `eps = 1e-8`):
+
+$$\mathbf{m}_i^{(t)} = \beta_1 \mathbf{m}_i^{(t-1)} + (1 - \beta_1) \mathbf{g}_i$$
+
+$$\mathbf{v}_i^{(t)} = \beta_2 \mathbf{v}_i^{(t-1)} + (1 - \beta_2) \left(\mathbf{g}_i \odot \mathbf{g}_i\right)$$
+
+$$\hat{\mathbf{m}}_i^{(t)} = \frac{\mathbf{m}_i^{(t)}}{1 - \beta_1^t}, \qquad \hat{\mathbf{v}}_i^{(t)} = \frac{\mathbf{v}_i^{(t)}}{1 - \beta_2^t}$$
+
+$$\mathbf{w}_i^{(t)} = \mathbf{w}_i^{(t-1)} - \frac{\eta_t}{\sqrt{\hat{\mathbf{v}}_i^{(t)}} + \epsilon} \odot \hat{\mathbf{m}}_i^{(t)}, \qquad \eta_t = \frac{\eta_0}{1 + 0.005 t}$$
+
+---
+
+## 6. Engineering Safeguards & Invariants
+
+Several subtle numerical pitfalls commonly break Texel tuners. `Tuner.cs` enforces five strict invariants to guarantee mathematical and engine-level correctness:
+
+### 6.1 100% Startup Score Validation (`ValidateScores`)
+
+Before running a single optimization step, step `[2/4]` reconstructs the integer evaluation of every single position in the dataset from its extracted CSR features and compares it against `Evaluation.Evaluate()`.
+
+* In `Evaluation.Evaluate()`, `TempoBonus` is added **after** the integer division `/ TotalPhase`:
+
+  ```csharp
+  int whiteScore = (mgScore * pos.Phase + egScore * (Evaluation.TotalPhase - pos.Phase)) / Evaluation.TotalPhase;
+  int calcEval = (pos.StmSign * whiteScore) + tempoBonus;
+  ```
+
+* Because C# integer division truncates toward zero, folding `TempoBonus * 24` into `mgScore` and `egScore` prior to dividing by `24` can differ by `1 cp` whenever `whiteScore` and `tempoBonus` have opposite signs and the numerator is not divisible by 24. `ValidateScores` mirrors `Evaluation.Evaluate()`'s exact integer arithmetic and throws an `InvalidOperationException` if even 1 position out of 10,000,000 disagrees by `1 cp`.
+
+### 6.2 Fixed Centipawn Scale (`Optimal K` Anchored to PeSTO)
+
+In a linear evaluation where every feature is tuned, the sigmoid prediction $\sigma(s \cdot E(\mathbf{W}))$ depends only on the product $K \cdot \mathbf{W}$.
+
+* If `FindOptimalK` were calibrated against the *current* tuned weights in Incremental Mode, adding new positional bonuses (which widens the evaluation distribution) would cause `FindOptimalK` to shrink $K$.
+* A smaller $K$ compresses the blended search-eval targets $\sigma(s \cdot E_{\text{search}})$ toward `0.5` and reduces the sigmoid slope, forcing Adam to **inflate all material and positional weights** to compensate—creating a runaway feedback loop across incremental runs.
+* **Solution:** `Tuner.cs` **always** calibrates $K$ against the immutable `GetPestoBaselineWeights()` via a 30-iteration Golden-Section Search over $[0.1, 5.0]$. Furthermore, `FindOptimalK` precomputes the static PeSTO evaluations once before the search loop, making step `[3/4]` ~15× faster and locking $K$ to an invariant centipawn scale on any given dataset.
+
+### 6.3 7th-Rank Passed Pawn Collinearity Fix (`PassedBaseIdx`)
+
+On a chessboard (`a8=0..h1=63`), a White pawn on the 7th rank (`rank = 1`, squares `8..15`) only has the 8th rank (`rank = 0`) ahead of it. Because enemy pawns can never exist on the 1st or 8th rank, `WhitePassedMask[sq] & bP` is **always zero** for every pawn on the 7th rank.
+
+* Consequently, 100% of pawns on the 7th rank trigger both their 7th-rank Pawn PST feature (`index = 0..7`) **and** the 7th-rank Passed Pawn feature (`PassedBaseIdx = 373`).
+* The sum of the 8 Pawn PST features on rank 7 equals the `PassedBaseIdx` feature identically ($\sum_{f=0}^7 x_{\text{PST}(8+f)} \equiv x_{\text{Passed}[1]}$), creating **perfect linear collinearity**.
+* If Adam updates both `PassedBaseIdx` and `PawnPST[8..15]`, their weights drift in opposite directions (driving `PassedMg[1]` and `PassedEg[1]` negative while inflating the 7th-rank Pawn PSTs).
+* **Solution:** `Tuner.cs` freezes `PassedBaseIdx` (`if (i == PassedBaseIdx) continue;`) during Adam updates so the 8 seventh-rank Pawn PST features absorb the full combined value of a 7th-rank pawn, and then decomposes them cleanly in `PrintFormattedResults` (see Section 7).
+
+### 6.4 Phase-Constrained & Phase-Independent Gradients
+
+* **Middlegame-Only Terms (`KooIdx..KnoIdx`, indices `380..385`):**
+  King file exposure, queenless king centralization, and knight outposts are evaluated only in the middlegame in `Evaluation.cs`. In the Adam loop, the Endgame step lane is explicitly zeroed:
+
+  ```csharp
+  if (i >= KooIdx && i <= KnoIdx)
+  {
+      step = step.WithElement(1, 0.0);
+  }
+  ```
+
+* **Phase-Independent Tempo (`TempoIdx`, index `386`):**
+  `TempoBonus` is added unscaled regardless of game phase, meaning $\frac{\partial E_p}{\partial w_{\text{Tempo}}} = c_{\text{Tempo}} \left(\frac{\phi_p}{24} + \frac{24 - \phi_p}{24}\right) = c_{\text{Tempo}}$. Before the Adam update, the tuner sums both phase gradient lanes into a single unified gradient:
+
+  ```csharp
+  double tempoTotalGrad = grad0[TempoIdx].GetElement(0) + grad0[TempoIdx].GetElement(1);
+  grad0[TempoIdx] = Vector128.Create(tempoTotalGrad, tempoTotalGrad);
+  ```
+
+### 6.5 Windowed Relative Early Stopping
+
+To prevent endless training when MSE improvements become negligible, `Tuner.cs` tracks a reference `anchorMse` alongside `bestMse`:
+
+* `noImprovementEpochs` resets to `0` (and `anchorMse` updates to `currentMse`) **only** when the cumulative relative MSE drop from `anchorMse` exceeds `minRelImprovement = 2e-4` (`0.02%`).
+* If `patience = 30` consecutive epochs pass without achieving a `0.02%` relative reduction from the last anchor, training halts automatically and outputs `bestWeights`.
+
+---
+
+## 7. Material & PST Post-Processing Decomposition
+
+During optimization, base material values are folded into the Piece-Square Tables so every piece-square weight $w_{pc, sq}$ represents the **total value** of piece $pc$ standing on square $sq$. When training finishes, `PrintFormattedResults` decomposes those raw weights into clean, zero-centered PSTs and base material constants ready to paste into `Evaluation.cs`:
+
+1. **Pieces (`Knight`, `Bishop`, `Rook`, `Queen`, $pc \in \{1, 2, 3, 4\}$):**
+   * Base Material is the mean across all 64 squares:
+     $$\text{Mat}_{pc} = \text{round}\left(\frac{1}{64} \sum_{sq=0}^{63} w_{pc, sq}\right)$$
+   * Each PST entry is the residual from the piece's base material:
+     $$\text{PST}_{pc}[sq] = \text{round}\left(w_{pc, sq}\right) - \text{Mat}_{pc}$$
+
+2. **Pawns ($pc = 0$) & 7th-Rank Passed Pawn (`Passed[1]`):**
+   * Because 7th-rank pawns (`sq = 8..15`) carry the huge promotion-threat bonus of a passed pawn one step from queening, averaging them into `MgMaterial[0]` / `EgMaterial[0]` would artificially inflate base pawn material and make ranks 2–6 look heavily negative.
+   * Instead, base Pawn Material is computed as the mean over **ranks 2 through 6** (`sq = 16..55`, 40 squares):
+     $$\text{Mat}_{\text{Pawn}} = \text{round}\left(\frac{1}{40} \sum_{sq=16}^{55} w_{0, sq}\right)$$
+   * For ranks 2–6 (`sq = 16..55`), the Pawn PST is simply $\text{round}(w_{0, sq}) - \text{Mat}_{\text{Pawn}}$.
+   * For the 7th rank (`sq = 8..15`), let $T_f = \text{round}\left(w_{0, 8+f} + w_{\text{PassedBaseIdx}}\right)$ be the total tuned value of a pawn on file $f \in [0, 7]$ of the 7th rank. The 7th-rank passed pawn bonus (`PassedMg[1]` / `PassedEg[1]`) is extracted as the average excess over base pawn material:
+     $$\text{Passed}[1] = \text{round}\left(\frac{1}{8} \sum_{f=0}^{7} \left(T_f - \text{Mat}_{\text{Pawn}}\right)\right)$$
+   * Finally, the 7th-rank Pawn PST entries (`sq = 8..15`) store the file-specific residuals:
+     $$\text{PST}_{\text{Pawn}}[8 + f] = T_f - \text{Mat}_{\text{Pawn}} - \text{Passed}[1]$$
+   * This guarantees that in `Evaluation.Evaluate()`, the sum $\text{Mat}_{\text{Pawn}} + \text{PST}_{\text{Pawn}}[8+f] + \text{Passed}[1] = T_f$ reproduces the exact tuned weight with zero loss of accuracy.
+
+3. **King ($pc = 5$):**
+   * King material is fixed at `0`, so $\text{PST}_{\text{King}}[sq] = \text{round}(w_{5, sq})$.
+
+---
+
+## 8. Integration with `Evaluation.cs` (SWAR Packing)
+
+When the output of `Tuner.cs` is pasted into `Evaluation.cs`, the static constructor `Evaluation()` folds all material arrays, PST source tables, and positional constants into **SWAR (SIMD Within A Register)** 32-bit packed integers:
 
 ```csharp
-public sealed class CsrDataset
-{
-    public int[] RowPointers;      // Size: PositionCount + 1
-    public ushort[] FeatureIndices;// Size: Total active feature occurrences
-    public sbyte[] FeatureValues;  // Size: Total active feature occurrences (-128 to 127)
-    public byte[] Phase;           // Size: PositionCount (0..24)
-    public double[] Results;       // Size: PositionCount (1.0, 0.5, 0.0)
-}
+[MethodImpl(MethodImplOptions.AggressiveInlining)]
+private static int PackScore(int mg, int eg) => (eg << 16) + mg;
 ```
 
-### 3.2 Unrolled Evaluation Inner Loop
+* At startup, `Evaluation` builds a single flat lookup table `PstScoreTable[12 * 64]` where each entry holds `PackScore(MgMaterial[pc] + MgPstSource[pc][sq], EgMaterial[pc] + EgPstSource[pc][sq])` for White pieces and its negation for mirrored Black pieces.
+* During `Evaluation.Evaluate()`, both Middlegame and Endgame scores are accumulated in a single 32-bit integer `scorePacked` using standard `+` and `-` operations, and unpacked at the end via sign-extension correction:
 
-The evaluation and gradient calculations use 4x unrolled loops to maximize CPU instruction-level parallelism (ILP):
-
-```csharp
-// Unrolled Dot Product Calculation
-int k = rowStart;
-for (; k <= rowEnd - 4; k += 4)
-{
-    mgScore += featureValues[k] * mgWeights[featureIndices[k]];
-    egScore += featureValues[k] * egWeights[featureIndices[k]];
-
-    mgScore += featureValues[k+1] * mgWeights[featureIndices[k+1]];
-    egScore += featureValues[k+1] * egWeights[featureIndices[k+1]];
-
-    mgScore += featureValues[k+2] * mgWeights[featureIndices[k+2]];
-    egScore += featureValues[k+2] * egWeights[featureIndices[k+2]];
-
-    mgScore += featureValues[k+3] * mgWeights[featureIndices[k+3]];
-    egScore += featureValues[k+3] * egWeights[featureIndices[k+3]];
-}
-for (; k < rowEnd; k++)
-{
-    mgScore += featureValues[k] * mgWeights[featureIndices[k]];
-    egScore += featureValues[k] * egWeights[featureIndices[k]];
-}
-```
-
-### 3.3 Zero-Allocation Multithreading Structure
-
-To eliminate thread allocation churn and partition race conditions, gradient accumulation uses `ThreadLocal<ThreadBuffer>`:
-
-```csharp
-private class ThreadBuffer
-{
-    public readonly double[] MgGrad = new double[NumFeatures];
-    public readonly double[] EgGrad = new double[NumFeatures];
-    public double MseSum;
-
-    public void Clear()
-    {
-        Array.Clear(MgGrad, 0, NumFeatures);
-        Array.Clear(EgGrad, 0, NumFeatures);
-        MseSum = 0.0;
-    }
-}
-```
-
-During execution:
-
-1. `threadBuffers.Values` clears accumulated buffers at the start of each epoch.
-2. `Parallel.ForEach` processes data ranges concurrently across all available CPU threads.
-3. Thread accumulators merge into the global gradient array at the end of each epoch.
+  ```csharp
+  int mg = (short)scorePacked;
+  int eg = (scorePacked + 0x8000) >> 16;
+  ```
 
 ---
 
-## 4. Operational Modes & Setup
+## 9. Standard Tuning & SPRT Workflow
 
-### 4.1 Mode Comparison
+Follow this exact workflow whenever tuning AnkaX:
 
-#### Mode A: PeSTO Fine-Tuning (Default)
+### Step 1: Run the Tuner
 
-* **Description**: Initializes parameters with PeSTO baseline values. Refines existing heuristic parameters.
-* **Use Case**: Production engine optimization to improve existing strength.
-* **Code State**: `Array.Clear(initialMg);` lines remain commented out.
+For a clean full tune from the PeSTO baseline:
 
-#### Mode B: Zero-Bias / Tabula Rasa Tuning (From Scratch)
-
-* **Description**: Clears all initial weights to zero, deriving all evaluation terms entirely from training data.
-* **Use Case**: Learning balance weights independently without human pre-bias.
-* **Code Implementation**: Uncomment lines 145–146 in `Tuner.cs`:
-
-```csharp
-// Uncomment to perform Tabula Rasa tuning from zero:
-Array.Clear(initialMg, 0, initialMg.Length);
-Array.Clear(initialEg, 0, initialEg.Length);
+```powershell
+dotnet run -c Release -- tune data/E12.52-1M-D12-Resolved.book --fresh
 ```
 
-### 4.2 Early Stopping and Convergence Safeguards
+### Step 2: Inspect the Output Sanity Checks
 
-To prevent overfitting and stop execution when improvements stall:
+Before pasting the generated code into `Evaluation.cs`, verify that:
 
-* **Best MSE Tracking**: `bestMse` initializes to `double.MaxValue` (preventing premature stopping caused by comparing against pre-zeroed MSE metrics).
-* **Patience Window**: 50 consecutive epochs.
-* **Improvement Threshold**: `minImprovementThreshold = 1e-7`.
-* If $\text{MSE}_{\text{current}} < \text{MSE}_{\text{best}} - 10^{-7}$, `bestMse` updates and the plateau counter resets to 0.
+1. **Material Ordering:** `0 < Pawn < Knight < Bishop < Rook < Queen` in both `MgMaterial` and `EgMaterial`.
+2. **Passed Pawn Progression:** `PassedEg[1..6]` increases monotonically as the index approaches `1` (e.g., `PassedEg = [0, 143, 75, 58, 43, 23, 17, 0]`).
+3. **Positional Signs:**
+   * `BishopPairMg > 0` and `BishopPairEg > 0`
+   * `0 < RookSemiOpen < RookOpen` (both MG and EG)
+   * `IsolatedMg < 0` and `IsolatedEg < 0`
+   * `KingOwnOpenMg > KingAdjacentOpenMg > 0` and `KingOwnSemiOpenMg > 0`
+   * `KnightOutpostMg > 0` and `TempoBonus > 0`
 
----
+### Step 3: Paste & Verify 100% Score Match
 
-## 5. Command-Line Interface & Execution
+1. Copy the printed `#region Material & Phase`, `#region Positional Bonuses / Penalties`, and `#region PST Data` blocks from the console output and replace those three regions in `Evaluation.cs`.
+2. Run the tuner without `--fresh` and press `Ctrl+C` right after `[2/4]`:
 
-### 5.1 Dataset Requirement
+   ```powershell
+   dotnet run -c Release -- tune data/E12.52-1M-D12-Resolved.book
+   ```
 
-Training datasets must consist of quiet position FENs with game outcome annotations (`[1.0]`, `[0.5]`, `[0.0]`):
+3. Confirm that `[2/4]` outputs:
 
-```text
-r1bqkb1r/pppp1ppp/2n2n2/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 4 4 [0.5]
-rnbqk2r/ppp1bppp/4pn2/3p4/2PP4/5NP1/PP2PPBP/RNBQK2R b KQkq - 1 5 [1.0]
-```
+   ```text
+   [Validation] 100% match across 9,998,762 positions with Evaluation.Evaluate().
+   ```
 
-### 5.2 Executing the Tuner Command
+### Step 4: Run an SPRT Match
 
-To run the tuner from the terminal, compile AnkaX and execute:
+Never commit tuned weights based on MSE reduction alone—always validate with a Sequential Probability Ratio Test (SPRT) in self-play using `fastchess` or `cutechess-cli`:
 
-```bash
-# General Syntax
-dotnet run -c Release -- tune <path_to_epd> [epochs]
+```powershell
+# Build the candidate binary
+dotnet publish -c Release -o ./bin/candidate
 
-# Example: Tuning on 2,000,000 positions for up to 300 epochs
-dotnet run -c Release -- tune C:\Datasets\quiet-labeled.epd 300
-```
-
-### 5.3 Sample Log Output
-
-```text
-=== AnkaX Texel Evaluation Tuner ===
-Dataset File: QuietPositions.epd
-Target Epochs: 300
-Threads Allocated: 16
-
-[1/3] Parsing dataset into CSR format...
-Processed 1,000,000 positions...
-Processed 2,000,000 positions...
-Dataset parsed successfully: 2,451,029 positions loaded.
-CSR Matrix Memory Usage: 118.42 MB
-
-[2/3] Optimizing Sigmoid K Factor...
-Iter 01 | K = 0.00381966 | MSE = 0.06812041
-Iter 05 | K = 0.00542109 | MSE = 0.06210492
-Iter 12 | K = 0.00581024 | MSE = 0.06180311
-Optimal Scaling Factor Fitted: K = 0.00581024
-
-[3/3] Starting Adam Optimization Loop...
-Epoch 001/300 | MSE: 0.06180311 | LR: 0.400000 | Imp: +0.00000000 | Best
-Epoch 002/300 | MSE: 0.05941022 | LR: 0.399800 | Imp: +0.00239289 | Best
-Epoch 010/300 | MSE: 0.05410291 | LR: 0.398208 | Imp: +0.00031021 | Best
-...
-Epoch 142/300 | MSE: 0.04810231 | LR: 0.373483 | Imp: +0.00000002 | Stop Counter: 50/50
-Early stopping triggered: No MSE improvement > 1e-07 for 50 consecutive epochs.
-
-Tuning Complete. Total Time: 00:04:12.82
-Final MSE: 0.04810231 (Initial MSE: 0.06180311, Delta: -0.01370080)
+# Example fastchess SPRT command (STC: 8.0s + 0.08s)
+fastchess `
+  -engine cmd=./bin/candidate/ankax.exe name=AnkaX_Tuned `
+  -engine cmd=./bin/master/ankax.exe name=AnkaX_Base `
+  -each tc=8+0.08 `
+  -rounds 10000 -repeat -concurrency 4 `
+  -openings file=books/UHO_Lichess_4852_v1.epd format=epd order=random `
+  -sprt elo0=0.0 elo1=5.0 alpha=0.05 beta=0.05
 ```
 
 ---
 
-## 6. Integrating Results into Engine Source (`Evaluation.cs`)
+## 10. How to Add a New Evaluation Term
 
-When tuning finishes, `PrintFormattedResults()` generates clean, production-ready C# code. Parameters print using `private const` for scalar values and `private static readonly` for array values. This enables **JIT constant folding** and zero-overhead memory lookups, maximizing Engine Nodes Per Second (NPS).
+Because `Tuner.cs` validates 100% of positions against `Evaluation.Evaluate()` at startup, adding a new evaluation feature is completely foolproof—if the feature extraction in `Tuner.cs` does not match `Evaluation.cs` on even a single board state, `[2/4]` will immediately throw an exception telling you the exact position and score difference.
 
-### 6.1 Copy-Paste Source Code Output Example
+To add a new feature:
 
-Copy the console output directly into `Evaluation.cs`:
-
-```csharp
-// ============================================================================
-// AUTO-GENERATED BY ANKAX TEXEL TUNER
-// Final MSE: 0.04810231 | K: 0.00581024
-// ============================================================================
-
-// --- Positional Bonuses / Penalties ---
-private const int BishopPairBonusMg = 32;
-private const int BishopPairBonusEg = 48;
-
-private const int KnightMobilityBonusMg = 4;
-private const int KnightMobilityBonusEg = 4;
-
-private const int BishopMobilityBonusMg = 5;
-private const int BishopMobilityBonusEg = 5;
-
-private const int RookSemiOpenBonusMg = 12;
-private const int RookSemiOpenBonusEg = 8;
-
-private const int RookOpenBonusMg = 24;
-private const int RookOpenBonusEg = 16;
-
-private const int IsolatedPawnPenaltyMg = 12;
-private const int IsolatedPawnPenaltyEg = 14;
-
-private static readonly int[] PassedPawnBonusMg = { 0, 8, 14, 28, 52, 98 };
-private static readonly int[] PassedPawnBonusEg = { 0, 12, 22, 44, 82, 140 };
-
-// --- King Safety Parameters (MG Only) ---
-private const int KingOuterAttackMg = 4;
-private const int KingSemiOuterAttackMg = 8;
-private const int KingInnerAttackMg = 16;
-private const int KingSemiInnerAttackMg = 24;
-private const int QueenCheckThreatMg = 32;
-private const int KnightCheckThreatMg = 20;
-
-// --- PST Data ---
-private static readonly int[] MgPawnTable = {
-      0,   0,   0,   0,   0,   0,   0,   0,
-     98, 134,  61,  95,  68, 126,  34, -11,
-     -6,   7,  26,  31,  65,  56,  25, -20,
-    -14,  13,  18,  21,  23,  12,  17, -23,
-    -27,  -2,  -5,  12,  17,   6,  10, -25,
-    -26,  -4,  -4, -10,   3,   3,  33, -12,
-    -35,  -1, -20,  -8,  -1,  24,  38, -22,
-      0,   0,   0,   0,   0,   0,   0,   0
-};
-
-private static readonly int[] EgPawnTable = {
-      0,   0,   0,   0,   0,   0,   0,   0,
-    178, 173, 158, 134, 147, 132, 165, 187,
-     94, 100,  85,  67,  56,  69,  82,  82,
-     32,  45,  31,  27,  32,  33,  31,  11,
-     13,  17,   8,  13,  19,  11,  12, -11,
-      4,   7,  -6,   1,   0,  -5,  -1, -11,
-    -13,  -2,  -8,  -2,  -6,  -5,  -6, -22,
-      0,   0,   0,   0,   0,   0,   0,   0
-};
-
-// [Truncated for brevity: Knight, Bishop, Rook, Queen, King PSTs follow exact pattern]
-```
-
----
-
-## 7. Validation Strategy & SPRT Testing Framework
-
-Tuned evaluation parameters must be validated via Sequential Probability Ratio Testing (SPRT) using match automation tools like `cutechess`.
-
-### 7.1 Testing Rules
-
-1. **Never merge tuned values blindly**: Lower training MSE does not guarantee practical engine ELO gains.
-2. **Always test against previous baseline engine build**.
+1. **`Evaluation.cs`:**
+   * Add your new `internal const int` bonus/penalty in `#region Positional Bonuses / Penalties`.
+   * If it has both MG and EG components, pack it via `private static readonly int MyNewTermScore = PackScore(MyNewTermMg, MyNewTermEg);` and add it to `scorePacked` in `Evaluate()`.
+   * If it is MG-only, add it to `mg` in `Evaluate()`.
+2. **`Tuner.cs`:**
+   * Increment `TotalFeatures` (e.g., from `387` to `388`) and define a new feature index constant (keep `TempoIdx` as the final index).
+   * In `ExtractFeatures(short[] counts)`, increment `counts[MyNewIdx]` for White and decrement `counts[MyNewIdx]` for Black using the exact same condition as `Evaluation.cs`.
+   * If the term is MG-only, include its index in the `step = step.WithElement(1, 0.0);` range in `Run()`.
+   * Load the initial weight in `GetCurrentEvaluationWeights()` and print the tuned constant in `PrintFormattedResults()`.
