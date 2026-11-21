@@ -10,7 +10,7 @@ using static PieceAttacks;
 
 public static class Tuner
 {
-    private const int TotalFeatures = 386;
+    private const int TotalFeatures = 387;
 
     private const int BpIdx = 368;
     private const int KmIdx = 369;
@@ -25,6 +25,9 @@ public static class Tuner
     private const int KasoIdx = 383;
     private const int QkcIdx = 384;
     private const int KnoIdx = 385;
+    private const int TempoIdx = 386;
+
+    private const short NoEval = short.MinValue;
 
     private static readonly Vector128<double>[] PhaseWeights = CreatePhaseWeights();
 
@@ -80,7 +83,7 @@ public static class Tuner
         Console.WriteLine("=== AnkaX Sparse Texel Tuner (CSR + Multi-Threaded Adam) ===");
         Console.WriteLine($"Dataset:    {datasetPath}");
         Console.WriteLine($"Max Epochs: {maxEpochs}");
-        Console.WriteLine($"Parameters: {TotalFeatures} MG + {KooIdx} EG ({TotalFeatures + KooIdx} total weights)\n");
+        Console.WriteLine($"Parameters: {TotalFeatures} MG + {TotalFeatures - 7} EG ({TotalFeatures * 2 - 7} independent weights)\n");
 
         if (!File.Exists(datasetPath))
         {
@@ -102,10 +105,12 @@ public static class Tuner
         Console.WriteLine($"Loaded {positions.Length:N0} positions, {features.Length:N0} active entries (avg {avgFeatures:F1} features/pos) in {totalSw.ElapsedMilliseconds:N0} ms.");
 
         Console.WriteLine("\n[2/4] Running 100% startup score validation net...");
-        Vector128<double>[] weights = GetInitialWeights();
-        ValidateScores(positions, features, expectedEvals, weights);
+        Vector128<double>[] evalWeights = GetCurrentEvaluationWeights();
+        ValidateScores(positions, features, expectedEvals, evalWeights);
 
-        Console.WriteLine("\n[3/4] Fitting optimal sigmoid constant K...");
+        Console.WriteLine("\n[3/4] Setting up clean PeSTO baseline (PSTs + Material; Tempo and all secondary terms = 0)...");
+        Vector128<double>[] weights = GetPestoBaselineWeights();
+
         double k = FindOptimalK(positions, features, weights);
         double scale = k * Math.Log(10.0) / 400.0;
 
@@ -119,6 +124,7 @@ public static class Tuner
         Vector128<double>[] mVec = new Vector128<double>[TotalFeatures];
         Vector128<double>[] vVec = new Vector128<double>[TotalFeatures];
         Vector128<double>[] bestWeights = new Vector128<double>[TotalFeatures];
+        Array.Copy(weights, bestWeights, TotalFeatures);
 
         ThreadBuffer[] buffers = new ThreadBuffer[workerCount];
         for (int w = 0; w < workerCount; w++)
@@ -131,10 +137,11 @@ public static class Tuner
         const double oneMinusBeta1 = 1.0 - beta1;
         const double oneMinusBeta2 = 1.0 - beta2;
         const double eps = 1e-8;
-        const double initialLr = 0.05;
+        const double initialLr = 1.0;
+        const double lrDecay = 0.001;
         const double lambda = 0.0;
-        const double minRelImprovement = 1e-5;
-        const int patience = 50;
+        const double minRelImprovement = 1e-7;
+        const int patience = 100;
 
         Vector128<double> epsVec = Vector128.Create(eps);
         double beta1T = 1.0;
@@ -145,6 +152,7 @@ public static class Tuner
         double twoScale = 2.0 * scale;
 
         double bestMse = double.MaxValue;
+        double anchorMse = double.MaxValue;
         int noImprovementEpochs = 0;
         int totalPositions = positions.Length;
         int chunkSize = (totalPositions + workerCount - 1) / workerCount;
@@ -174,38 +182,39 @@ public static class Tuner
 
                 double localErr = 0.0;
 
-                for (int p = start; p < end; p++)
+                for (nint p = start; p < end; p++)
                 {
                     ref readonly PositionRecord pos = ref Unsafe.Add(ref posRef, p);
-                    ref FeatureEntry fBase = ref Unsafe.Add(ref featRef, pos.StartOffset);
-                    int len = pos.Length;
+                    ref FeatureEntry fBase = ref Unsafe.Add(ref featRef, (nint)pos.StartOffset);
+                    nint len = pos.Length;
 
                     Vector128<double> sum0 = Vector128<double>.Zero;
                     Vector128<double> sum1 = Vector128<double>.Zero;
-                    int i = 0;
+                    nint i = 0;
 
                     for (; i <= len - 4; i += 4)
                     {
-                        ref readonly FeatureEntry f0 = ref Unsafe.Add(ref fBase, i);
-                        ref readonly FeatureEntry f1 = ref Unsafe.Add(ref fBase, i + 1);
-                        ref readonly FeatureEntry f2 = ref Unsafe.Add(ref fBase, i + 2);
-                        ref readonly FeatureEntry f3 = ref Unsafe.Add(ref fBase, i + 3);
+                        ref FeatureEntry fCurr = ref Unsafe.Add(ref fBase, i);
+                        ref readonly FeatureEntry f0 = ref fCurr;
+                        ref readonly FeatureEntry f1 = ref Unsafe.Add(ref fCurr, 1);
+                        ref readonly FeatureEntry f2 = ref Unsafe.Add(ref fCurr, 2);
+                        ref readonly FeatureEntry f3 = ref Unsafe.Add(ref fCurr, 3);
 
-                        sum0 += Unsafe.Add(ref wRef, f0.Index) * (double)f0.Coeff
-                              + Unsafe.Add(ref wRef, f1.Index) * (double)f1.Coeff;
-                        sum1 += Unsafe.Add(ref wRef, f2.Index) * (double)f2.Coeff
-                              + Unsafe.Add(ref wRef, f3.Index) * (double)f3.Coeff;
+                        sum0 += Unsafe.Add(ref wRef, (nint)f0.Index) * (double)f0.Coeff
+                              + Unsafe.Add(ref wRef, (nint)f1.Index) * (double)f1.Coeff;
+                        sum1 += Unsafe.Add(ref wRef, (nint)f2.Index) * (double)f2.Coeff
+                              + Unsafe.Add(ref wRef, (nint)f3.Index) * (double)f3.Coeff;
                     }
 
                     Vector128<double> sum = sum0 + sum1;
                     for (; i < len; i++)
                     {
                         ref readonly FeatureEntry f = ref Unsafe.Add(ref fBase, i);
-                        sum += Unsafe.Add(ref wRef, f.Index) * (double)f.Coeff;
+                        sum += Unsafe.Add(ref wRef, (nint)f.Index) * (double)f.Coeff;
                     }
 
-                    Vector128<double> phaseW = Unsafe.Add(ref phaseWRef, pos.Phase);
-                    double eval = Vector128.Dot(sum, phaseW) + (pos.StmSign * Evaluation.TempoBonus);
+                    Vector128<double> phaseW = Unsafe.Add(ref phaseWRef, (nint)pos.Phase);
+                    double eval = Vector128.Dot(sum, phaseW);
                     double sigmoid = 1.0 / (1.0 + Math.Exp(-scale * eval));
 
                     double diff = sigmoid - Unsafe.Add(ref targetRef, p);
@@ -217,42 +226,53 @@ public static class Tuner
                     i = 0;
                     for (; i <= len - 4; i += 4)
                     {
-                        ref readonly FeatureEntry f0 = ref Unsafe.Add(ref fBase, i);
-                        ref readonly FeatureEntry f1 = ref Unsafe.Add(ref fBase, i + 1);
-                        ref readonly FeatureEntry f2 = ref Unsafe.Add(ref fBase, i + 2);
-                        ref readonly FeatureEntry f3 = ref Unsafe.Add(ref fBase, i + 3);
+                        ref FeatureEntry fCurr = ref Unsafe.Add(ref fBase, i);
+                        ref readonly FeatureEntry f0 = ref fCurr;
+                        ref readonly FeatureEntry f1 = ref Unsafe.Add(ref fCurr, 1);
+                        ref readonly FeatureEntry f2 = ref Unsafe.Add(ref fCurr, 2);
+                        ref readonly FeatureEntry f3 = ref Unsafe.Add(ref fCurr, 3);
 
-                        Unsafe.Add(ref gRef, f0.Index) += gradVec * (double)f0.Coeff;
-                        Unsafe.Add(ref gRef, f1.Index) += gradVec * (double)f1.Coeff;
-                        Unsafe.Add(ref gRef, f2.Index) += gradVec * (double)f2.Coeff;
-                        Unsafe.Add(ref gRef, f3.Index) += gradVec * (double)f3.Coeff;
+                        Unsafe.Add(ref gRef, (nint)f0.Index) += gradVec * (double)f0.Coeff;
+                        Unsafe.Add(ref gRef, (nint)f1.Index) += gradVec * (double)f1.Coeff;
+                        Unsafe.Add(ref gRef, (nint)f2.Index) += gradVec * (double)f2.Coeff;
+                        Unsafe.Add(ref gRef, (nint)f3.Index) += gradVec * (double)f3.Coeff;
                     }
 
                     for (; i < len; i++)
                     {
                         ref readonly FeatureEntry f = ref Unsafe.Add(ref fBase, i);
-                        Unsafe.Add(ref gRef, f.Index) += gradVec * (double)f.Coeff;
+                        Unsafe.Add(ref gRef, (nint)f.Index) += gradVec * (double)f.Coeff;
                     }
                 }
 
                 local.SquaredError = localErr;
             });
 
-            double totalSquaredError = 0.0;
-            for (int w = 0; w < workerCount; w++)
+            double totalSquaredError = buffers[0].SquaredError;
+            Vector128<double>[] grad0 = buffers[0].Grad;
+            for (int w = 1; w < workerCount; w++)
             {
                 totalSquaredError += buffers[w].SquaredError;
+                Vector128<double>[] workerGrad = buffers[w].Grad;
+                for (int i = 0; i < TotalFeatures; i++)
+                {
+                    grad0[i] += workerGrad[i];
+                }
             }
 
             double currentMse = totalSquaredError * invN;
-            double lr = initialLr / (1.0 + 0.0005 * epoch);
+            double lr = initialLr / (1.0 + lrDecay * epoch);
 
             if (currentMse < bestMse)
             {
-                bool meaningful = (bestMse - currentMse) > (bestMse * minRelImprovement);
                 bestMse = currentMse;
                 Array.Copy(weights, bestWeights, TotalFeatures);
-                noImprovementEpochs = meaningful ? 0 : noImprovementEpochs + 1;
+            }
+
+            if ((anchorMse - currentMse) > (anchorMse * minRelImprovement))
+            {
+                anchorMse = currentMse;
+                noImprovementEpochs = 0;
             }
             else
             {
@@ -265,15 +285,14 @@ public static class Tuner
                 break;
             }
 
+            // TempoBonus is a single phase-independent parameter in Evaluation.cs,
+            // so its gradient is the sum of the MG and EG partial derivatives.
+            double tempoTotalGrad = grad0[TempoIdx].GetElement(0) + grad0[TempoIdx].GetElement(1);
+            grad0[TempoIdx] = Vector128.Create(tempoTotalGrad, tempoTotalGrad);
+
             for (int i = 0; i < TotalFeatures; i++)
             {
-                Vector128<double> gradSum = Vector128<double>.Zero;
-                for (int w = 0; w < workerCount; w++)
-                {
-                    gradSum += buffers[w].Grad[i];
-                }
-
-                Vector128<double> g = (gradSum * invN) + (weights[i] * lambda);
+                Vector128<double> g = (grad0[i] * invN) + (weights[i] * lambda);
                 Vector128<double> m = (mVec[i] * beta1) + (g * oneMinusBeta1);
                 Vector128<double> v = (vVec[i] * beta2) + (g * g * oneMinusBeta2);
                 mVec[i] = m;
@@ -283,7 +302,8 @@ public static class Tuner
                 Vector128<double> vHat = v * invBiasCorr2;
                 Vector128<double> step = (mHat * lr) / (Vector128.Sqrt(vHat) + epsVec);
 
-                if (i >= KooIdx)
+                // Zero out Endgame update strictly for Middlegame-only King Safety / Outpost features
+                if (i >= KooIdx && i <= KnoIdx)
                 {
                     step = step.WithElement(1, 0.0);
                 }
@@ -320,8 +340,12 @@ public static class Tuner
 
             ParseFEN(fenPart);
 
-            if (bitboards[K] == 0 || bitboards[k] == 0)
+            // Guard against missing/duplicate kings or pawns on ranks 1/8
+            if (PopCount(bitboards[K]) != 1 || PopCount(bitboards[k]) != 1 ||
+                ((bitboards[P] | bitboards[p]) & 0xFF000000000000FFUL) != 0)
+            {
                 continue;
+            }
 
             Array.Clear(counts);
             ExtractFeatures(counts);
@@ -359,7 +383,7 @@ public static class Tuner
     {
         fen = string.Empty;
         whiteResult = 0.5f;
-        searchEval = 0;
+        searchEval = NoEval;
 
         int bracketStart = line.IndexOf('[');
         if (bracketStart != -1)
@@ -479,8 +503,8 @@ public static class Tuner
 
             int rank = sq >> 3;
             if ((uint)(rank - 2) <= 2
-                && (pawnAttacks[Black, sq] & wP) != 0
-                && (Evaluation.WhiteOutpostMask[sq] & bP) == 0)
+                && (Evaluation.WhiteOutpostMask[sq] & bP) == 0
+                && (pawnAttacks[Black, sq] & wP) != 0)
             {
                 counts[KnoIdx] += 1;
             }
@@ -495,8 +519,8 @@ public static class Tuner
 
             int rank = sq >> 3;
             if ((uint)(rank - 3) <= 2
-                && (pawnAttacks[White, sq] & bP) != 0
-                && (Evaluation.BlackOutpostMask[sq] & wP) == 0)
+                && (Evaluation.BlackOutpostMask[sq] & wP) == 0
+                && (pawnAttacks[White, sq] & bP) != 0)
             {
                 counts[KnoIdx] -= 1;
             }
@@ -504,25 +528,21 @@ public static class Tuner
         counts[KmIdx] += (short)kmDiff;
 
         int bmDiff = 0;
-        int wBishopCount = 0;
         for (ulong x = wB; x != 0; x &= x - 1)
         {
             int sq = TrailingZeroCount(x);
             counts[112 + sq] += 1;
-            wBishopCount++;
             bmDiff += PopCount(GetBishopAttacks(sq, allOcc) & ~wOcc) - Evaluation.BishopMobBase;
         }
-        if (wBishopCount >= 2) counts[BpIdx] += 1;
+        if ((wB & (wB - 1)) != 0) counts[BpIdx] += 1;
 
-        int bBishopCount = 0;
         for (ulong x = bBi; x != 0; x &= x - 1)
         {
             int sq = TrailingZeroCount(x);
             counts[112 + (sq ^ 56)] -= 1;
-            bBishopCount++;
             bmDiff -= PopCount(GetBishopAttacks(sq, allOcc) & ~bOcc) - Evaluation.BishopMobBase;
         }
-        if (bBishopCount >= 2) counts[BpIdx] -= 1;
+        if ((bBi & (bBi - 1)) != 0) counts[BpIdx] -= 1;
         counts[BmIdx] += (short)bmDiff;
 
         for (ulong x = wR; x != 0; x &= x - 1)
@@ -569,6 +589,8 @@ public static class Tuner
         {
             counts[QkcIdx] += (short)(Evaluation.KingCenterTable[wkSq] - Evaluation.KingCenterTable[bkSq]);
         }
+
+        counts[TempoIdx] = (short)(side == White ? 1 : -1);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -608,48 +630,6 @@ public static class Tuner
         return piece == 0 ? square - 8 : (piece << 6) - 16 + square;
     }
 
-    private static Vector128<double>[] GetInitialWeights()
-    {
-        Vector128<double>[] w = new Vector128<double>[TotalFeatures];
-        for (int pc = 0; pc < 6; pc++)
-        {
-            int minSq = pc == 0 ? 8 : 0;
-            int maxSq = pc == 0 ? 56 : 64;
-            int mgMat = Evaluation.MgMaterial[pc];
-            int egMat = Evaluation.EgMaterial[pc];
-            int[] mgPst = Evaluation.MgPstSource[pc];
-            int[] egPst = Evaluation.EgPstSource[pc];
-
-            for (int sq = minSq; sq < maxSq; sq++)
-            {
-                w[GetPstIndex(pc, sq)] = Vector128.Create(
-                    (double)(mgMat + mgPst[sq]),
-                    (double)(egMat + egPst[sq])
-                );
-            }
-        }
-
-        w[BpIdx] = Vector128.Create((double)Evaluation.BishopPairMg, (double)Evaluation.BishopPairEg);
-        w[KmIdx] = Vector128.Create((double)Evaluation.KnightMobMg, (double)Evaluation.KnightMobEg);
-        w[BmIdx] = Vector128.Create((double)Evaluation.BishopMobMg, (double)Evaluation.BishopMobEg);
-        w[RsoIdx] = Vector128.Create((double)Evaluation.RookSemiOpenMg, (double)Evaluation.RookSemiOpenEg);
-        w[RoIdx] = Vector128.Create((double)Evaluation.RookOpenMg, (double)Evaluation.RookOpenEg);
-
-        for (int d = 1; d <= 6; d++)
-        {
-            w[PassedBaseIdx + d - 1] = Vector128.Create((double)Evaluation.PassedMg[d], (double)Evaluation.PassedEg[d]);
-        }
-
-        w[IsoIdx] = Vector128.Create((double)Evaluation.IsolatedMg, (double)Evaluation.IsolatedEg);
-        w[KooIdx] = Vector128.Create((double)Evaluation.KingOwnOpenMg, 0.0);
-        w[KosoIdx] = Vector128.Create((double)Evaluation.KingOwnSemiOpenMg, 0.0);
-        w[KaoIdx] = Vector128.Create((double)Evaluation.KingAdjacentOpenMg, 0.0);
-        w[KasoIdx] = Vector128.Create((double)Evaluation.KingAdjacentSemiOpenMg, 0.0);
-        w[QkcIdx] = Vector128.Create((double)Evaluation.QueenlessKingCenterMg, 0.0);
-        w[KnoIdx] = Vector128.Create((double)Evaluation.KnightOutpostMg, 0.0);
-        return w;
-    }
-
     private static void ValidateScores(
         PositionRecord[] positions,
         FeatureEntry[] features,
@@ -657,6 +637,7 @@ public static class Tuner
         Vector128<double>[] initialWeights)
     {
         ref Vector128<double> wRef = ref MemoryMarshal.GetArrayDataReference(initialWeights);
+        int tempoBonus = (int)Math.Round(initialWeights[TempoIdx].GetElement(0));
 
         for (int p = 0; p < positions.Length; p++)
         {
@@ -666,13 +647,14 @@ public static class Tuner
             Vector128<double> sum = Vector128<double>.Zero;
             foreach (ref readonly FeatureEntry f in feats)
             {
-                sum += Unsafe.Add(ref wRef, f.Index) * (double)f.Coeff;
+                if (f.Index == TempoIdx) continue;
+                sum += Unsafe.Add(ref wRef, (nint)f.Index) * (double)f.Coeff;
             }
 
             int mgScore = (int)Math.Round(sum.GetElement(0));
             int egScore = (int)Math.Round(sum.GetElement(1));
             int whiteScore = (mgScore * pos.Phase + egScore * (Evaluation.TotalPhase - pos.Phase)) / Evaluation.TotalPhase;
-            int calcEval = (pos.StmSign * whiteScore) + Evaluation.TempoBonus;
+            int calcEval = (pos.StmSign * whiteScore) + tempoBonus;
 
             if (calcEval != expectedEvals[p])
             {
@@ -697,11 +679,11 @@ public static class Tuner
             ref PositionRecord posRef = ref MemoryMarshal.GetArrayDataReference(positions);
             ref double targetRef = ref MemoryMarshal.GetArrayDataReference(targets);
 
-            for (int p = start; p < end; p++)
+            for (nint p = start; p < end; p++)
             {
                 ref readonly PositionRecord pos = ref Unsafe.Add(ref posRef, p);
                 double target = pos.Result;
-                if (pos.Eval != 0)
+                if (pos.Eval != NoEval)
                 {
                     double searchEvalWhite = pos.Eval * pos.StmSign;
                     double evalTargetProb = 1.0 / (1.0 + Math.Exp(-scale * searchEvalWhite));
@@ -739,21 +721,34 @@ public static class Tuner
 
             double localErr = 0.0;
 
-            for (int p = start; p < end; p++)
+            for (nint p = start; p < end; p++)
             {
                 ref readonly PositionRecord pos = ref Unsafe.Add(ref posRef, p);
-                ref FeatureEntry fBase = ref Unsafe.Add(ref featRef, pos.StartOffset);
-                int len = pos.Length;
+                ref FeatureEntry fBase = ref Unsafe.Add(ref featRef, (nint)pos.StartOffset);
+                nint len = pos.Length;
 
-                Vector128<double> sum = Vector128<double>.Zero;
-                for (int i = 0; i < len; i++)
+                Vector128<double> sum0 = Vector128<double>.Zero;
+                Vector128<double> sum1 = Vector128<double>.Zero;
+                nint i = 0;
+
+                for (; i <= len - 4; i += 4)
                 {
-                    ref readonly FeatureEntry f = ref Unsafe.Add(ref fBase, i);
-                    sum += Unsafe.Add(ref wRef, f.Index) * (double)f.Coeff;
+                    ref FeatureEntry fCurr = ref Unsafe.Add(ref fBase, i);
+                    sum0 += Unsafe.Add(ref wRef, (nint)fCurr.Index) * (double)fCurr.Coeff
+                          + Unsafe.Add(ref wRef, (nint)Unsafe.Add(ref fCurr, 1).Index) * (double)Unsafe.Add(ref fCurr, 1).Coeff;
+                    sum1 += Unsafe.Add(ref wRef, (nint)Unsafe.Add(ref fCurr, 2).Index) * (double)Unsafe.Add(ref fCurr, 2).Coeff
+                          + Unsafe.Add(ref wRef, (nint)Unsafe.Add(ref fCurr, 3).Index) * (double)Unsafe.Add(ref fCurr, 3).Coeff;
                 }
 
-                Vector128<double> phaseW = Unsafe.Add(ref phaseWRef, pos.Phase);
-                double eval = Vector128.Dot(sum, phaseW) + (pos.StmSign * Evaluation.TempoBonus);
+                Vector128<double> sum = sum0 + sum1;
+                for (; i < len; i++)
+                {
+                    ref readonly FeatureEntry f = ref Unsafe.Add(ref fBase, i);
+                    sum += Unsafe.Add(ref wRef, (nint)f.Index) * (double)f.Coeff;
+                }
+
+                Vector128<double> phaseW = Unsafe.Add(ref phaseWRef, (nint)pos.Phase);
+                double eval = Vector128.Dot(sum, phaseW);
                 double sigmoid = 1.0 / (1.0 + Math.Exp(-scale * eval));
                 double diff = sigmoid - Unsafe.Add(ref targetRef, p);
                 localErr += diff * diff;
@@ -794,32 +789,37 @@ public static class Tuner
 
             double localErr = 0.0;
 
-            for (int p = start; p < end; p++)
+            for (nint p = start; p < end; p++)
             {
                 ref readonly PositionRecord pos = ref Unsafe.Add(ref posRef, p);
-                ref FeatureEntry fBase = ref Unsafe.Add(ref featRef, pos.StartOffset);
-                int len = pos.Length;
+                ref FeatureEntry fBase = ref Unsafe.Add(ref featRef, (nint)pos.StartOffset);
+                nint len = pos.Length;
 
-                Vector128<double> sum = Vector128<double>.Zero;
-                for (int i = 0; i < len; i++)
+                Vector128<double> sum0 = Vector128<double>.Zero;
+                Vector128<double> sum1 = Vector128<double>.Zero;
+                nint i = 0;
+
+                for (; i <= len - 4; i += 4)
+                {
+                    ref FeatureEntry fCurr = ref Unsafe.Add(ref fBase, i);
+                    sum0 += Unsafe.Add(ref wRef, (nint)fCurr.Index) * (double)fCurr.Coeff
+                          + Unsafe.Add(ref wRef, (nint)Unsafe.Add(ref fCurr, 1).Index) * (double)Unsafe.Add(ref fCurr, 1).Coeff;
+                    sum1 += Unsafe.Add(ref wRef, (nint)Unsafe.Add(ref fCurr, 2).Index) * (double)Unsafe.Add(ref fCurr, 2).Coeff
+                          + Unsafe.Add(ref wRef, (nint)Unsafe.Add(ref fCurr, 3).Index) * (double)Unsafe.Add(ref fCurr, 3).Coeff;
+                }
+
+                Vector128<double> sum = sum0 + sum1;
+                for (; i < len; i++)
                 {
                     ref readonly FeatureEntry f = ref Unsafe.Add(ref fBase, i);
-                    sum += Unsafe.Add(ref wRef, f.Index) * (double)f.Coeff;
+                    sum += Unsafe.Add(ref wRef, (nint)f.Index) * (double)f.Coeff;
                 }
 
-                Vector128<double> phaseW = Unsafe.Add(ref phaseWRef, pos.Phase);
-                double eval = Vector128.Dot(sum, phaseW) + (pos.StmSign * Evaluation.TempoBonus);
+                Vector128<double> phaseW = Unsafe.Add(ref phaseWRef, (nint)pos.Phase);
+                double eval = Vector128.Dot(sum, phaseW);
                 double sigmoid = 1.0 / (1.0 + Math.Exp(-scale * eval));
 
-                double targetResult = pos.Result;
-                if (pos.Eval != 0)
-                {
-                    double searchEvalWhite = pos.Eval * pos.StmSign;
-                    double evalTargetProb = 1.0 / (1.0 + Math.Exp(-scale * searchEvalWhite));
-                    targetResult = 0.5 * pos.Result + 0.5 * evalTargetProb;
-                }
-
-                double diff = sigmoid - targetResult;
+                double diff = sigmoid - pos.Result;
                 localErr += diff * diff;
             }
 
@@ -928,8 +928,8 @@ public static class Tuner
         Console.WriteLine("    //   0=Pawn  1=Knight  2=Bishop  3=Rook  4=Queen  5=King");
         Console.WriteLine("    // King is 0 because it's never captured; its \"value\" is implicit in game");
         Console.WriteLine("    // termination, not in evaluation.");
-        Console.WriteLine($"    private static readonly int[] MgMaterial = [{tunedMgMat[0]}, {tunedMgMat[1]}, {tunedMgMat[2]}, {tunedMgMat[3]}, {tunedMgMat[4]}, 0];");
-        Console.WriteLine($"    private static readonly int[] EgMaterial = [{tunedEgMat[0]}, {tunedEgMat[1]}, {tunedEgMat[2]}, {tunedEgMat[3]}, {tunedEgMat[4]}, 0];\n");
+        Console.WriteLine($"    internal static readonly int[] MgMaterial = [{tunedMgMat[0]}, {tunedMgMat[1]}, {tunedMgMat[2]}, {tunedMgMat[3]}, {tunedMgMat[4]}, 0];");
+        Console.WriteLine($"    internal static readonly int[] EgMaterial = [{tunedEgMat[0]}, {tunedEgMat[1]}, {tunedEgMat[2]}, {tunedEgMat[3]}, {tunedEgMat[4]}, 0];\n");
         Console.WriteLine("    // Starting position phase: 2 sides × (2×Knight + 2×Bishop + 2×Rook + 1×Queen)");
         Console.WriteLine("    //   = 2 × (2·1 + 2·1 + 2·2 + 1·4) = 24.");
         Console.WriteLine("    // Phase is accumulated inline during evaluation (Knight/Bishop += 1,");
@@ -940,41 +940,41 @@ public static class Tuner
         Console.WriteLine("    #region Positional Bonuses / Penalties\n");
         Console.WriteLine("    // Having both bishops is worth a small bonus because they cover");
         Console.WriteLine("    // complementary colour complexes.");
-        Console.WriteLine($"    private const int BishopPairMg = {(int)Math.Round(weights[BpIdx].GetElement(0))}, BishopPairEg = {(int)Math.Round(weights[BpIdx].GetElement(1))};\n");
+        Console.WriteLine($"    internal const int BishopPairMg = {(int)Math.Round(weights[BpIdx].GetElement(0))}, BishopPairEg = {(int)Math.Round(weights[BpIdx].GetElement(1))};\n");
         Console.WriteLine("    // Mobility = (number of safe destination squares) − (a baseline).");
         Console.WriteLine("    // Subtracting a baseline keeps the \"average\" piece near zero so the");
         Console.WriteLine("    // mobility term doesn't silently inflate material values.");
-        Console.WriteLine($"    private const int KnightMobMg = {(int)Math.Round(weights[KmIdx].GetElement(0))}, KnightMobEg = {(int)Math.Round(weights[KmIdx].GetElement(1))}, KnightMobBase = 4;");
-        Console.WriteLine($"    private const int BishopMobMg = {(int)Math.Round(weights[BmIdx].GetElement(0))}, BishopMobEg = {(int)Math.Round(weights[BmIdx].GetElement(1))}, BishopMobBase = 6;\n");
+        Console.WriteLine($"    internal const int KnightMobMg = {(int)Math.Round(weights[KmIdx].GetElement(0))}, KnightMobEg = {(int)Math.Round(weights[KmIdx].GetElement(1))}, KnightMobBase = 4;");
+        Console.WriteLine($"    internal const int BishopMobMg = {(int)Math.Round(weights[BmIdx].GetElement(0))}, BishopMobEg = {(int)Math.Round(weights[BmIdx].GetElement(1))}, BishopMobBase = 6;\n");
         Console.WriteLine("    // Rook on a file with no friendly pawn:");
         Console.WriteLine("    //   semi-open = only enemy pawns on it (good attacking lane)");
         Console.WriteLine("    //   open      = no pawns at all (best — rook sees the whole file)");
-        Console.WriteLine($"    private const int RookSemiOpenMg = {(int)Math.Round(weights[RsoIdx].GetElement(0))}, RookSemiOpenEg = {(int)Math.Round(weights[RsoIdx].GetElement(1))};");
-        Console.WriteLine($"    private const int RookOpenMg = {(int)Math.Round(weights[RoIdx].GetElement(0))}, RookOpenEg = {(int)Math.Round(weights[RoIdx].GetElement(1))};\n");
+        Console.WriteLine($"    internal const int RookSemiOpenMg = {(int)Math.Round(weights[RsoIdx].GetElement(0))}, RookSemiOpenEg = {(int)Math.Round(weights[RsoIdx].GetElement(1))};");
+        Console.WriteLine($"    internal const int RookOpenMg = {(int)Math.Round(weights[RoIdx].GetElement(0))}, RookOpenEg = {(int)Math.Round(weights[RoIdx].GetElement(1))};\n");
         Console.WriteLine("    // Passed pawn bonus indexed by squares left to promotion (0..7):");
         Console.WriteLine("    //   index 1 = one step from promoting, index 6 = still on its start square.");
         Console.WriteLine("    // A pawn gets this if no enemy pawn can block or capture it on its way");
         Console.WriteLine("    // to promotion. The closer to promotion, the bigger the bonus — much");
         Console.WriteLine("    // larger in the endgame where promotion threats dominate.");
-        Console.WriteLine($"    private static readonly int[] PassedMg = [{passMg[0]}, {passMg[1]}, {passMg[2]}, {passMg[3]}, {passMg[4]}, {passMg[5]}, {passMg[6]}, {passMg[7]}];");
-        Console.WriteLine($"    private static readonly int[] PassedEg = [{passEg[0]}, {passEg[1]}, {passEg[2]}, {passEg[3]}, {passEg[4]}, {passEg[5]}, {passEg[6]}, {passEg[7]}];\n");
+        Console.WriteLine($"    internal static readonly int[] PassedMg = [{passMg[0]}, {passMg[1]}, {passMg[2]}, {passMg[3]}, {passMg[4]}, {passMg[5]}, {passMg[6]}, {passMg[7]}];");
+        Console.WriteLine($"    internal static readonly int[] PassedEg = [{passEg[0]}, {passEg[1]}, {passEg[2]}, {passEg[3]}, {passEg[4]}, {passEg[5]}, {passEg[6]}, {passEg[7]}];\n");
         Console.WriteLine("    // A pawn with no friendly pawn on either adjacent file. Weak because it");
         Console.WriteLine("    // can never be defended by another pawn.");
-        Console.WriteLine($"    private const int IsolatedMg = {(int)Math.Round(weights[IsoIdx].GetElement(0))}, IsolatedEg = {(int)Math.Round(weights[IsoIdx].GetElement(1))};\n");
+        Console.WriteLine($"    internal const int IsolatedMg = {(int)Math.Round(weights[IsoIdx].GetElement(0))}, IsolatedEg = {(int)Math.Round(weights[IsoIdx].GetElement(1))};\n");
         Console.WriteLine("    // King safety: penalties for open/semi-open files near the king. Only");
         Console.WriteLine("    // applied in the middlegame — in the endgame the king wants to be active.");
-        Console.WriteLine($"    private const int KingOwnOpenMg = {(int)Math.Round(weights[KooIdx].GetElement(0))}, KingOwnSemiOpenMg = {(int)Math.Round(weights[KosoIdx].GetElement(0))};");
-        Console.WriteLine($"    private const int KingAdjacentOpenMg = {(int)Math.Round(weights[KaoIdx].GetElement(0))}, KingAdjacentSemiOpenMg = {(int)Math.Round(weights[KasoIdx].GetElement(0))};\n");
+        Console.WriteLine($"    internal const int KingOwnOpenMg = {(int)Math.Round(weights[KooIdx].GetElement(0))}, KingOwnSemiOpenMg = {(int)Math.Round(weights[KosoIdx].GetElement(0))};");
+        Console.WriteLine($"    internal const int KingAdjacentOpenMg = {(int)Math.Round(weights[KaoIdx].GetElement(0))}, KingAdjacentSemiOpenMg = {(int)Math.Round(weights[KasoIdx].GetElement(0))};\n");
         Console.WriteLine("    // Once both queens are gone, encourage the king toward the centre so it");
         Console.WriteLine("    // can help its pawns promote.");
-        Console.WriteLine($"    private const int QueenlessKingCenterMg = {(int)Math.Round(weights[QkcIdx].GetElement(0))};\n");
+        Console.WriteLine($"    internal const int QueenlessKingCenterMg = {(int)Math.Round(weights[QkcIdx].GetElement(0))};\n");
         Console.WriteLine("    // Knight sitting on a square where:");
         Console.WriteLine("    //   • it's protected by a friendly pawn");
         Console.WriteLine("    //   • it can't be kicked by any enemy pawn on adjacent files");
         Console.WriteLine("    // Outposts are classical strong squares (think c5/d5/e5/f5 for White).");
-        Console.WriteLine($"    private const int KnightOutpostMg = {(int)Math.Round(weights[KnoIdx].GetElement(0))};\n");
+        Console.WriteLine($"    internal const int KnightOutpostMg = {(int)Math.Round(weights[KnoIdx].GetElement(0))};\n");
         Console.WriteLine("    // Tempo bonus: static advantage awarded to the side to move");
-        Console.WriteLine($"    internal const int TempoBonus = {Evaluation.TempoBonus};\n");
+        Console.WriteLine($"    internal const int TempoBonus = {(int)Math.Round(weights[TempoIdx].GetElement(0))};\n");
         Console.WriteLine("    #endregion\n");
 
         Console.WriteLine("    // =========================================================================");
@@ -985,7 +985,7 @@ public static class Tuner
         Console.WriteLine("    //  board's visual layout when you read top-to-bottom, left-to-right.");
         Console.WriteLine("    //");
         Console.WriteLine("    //  These are \"source\" tables. At startup we fold them with the material");
-        Console.WriteLine("    //  values into a single flat lookup (MgTable/EgTable) for fast access.");
+        Console.WriteLine("    //  values into a single flat lookup (PstScoreTable) for fast access.");
         Console.WriteLine("    // =========================================================================\n");
         Console.WriteLine("    #region PST Data\n");
 
@@ -1043,5 +1043,73 @@ public static class Tuner
             if (rank < 7) Console.WriteLine();
         }
         Console.WriteLine(trailingComma ? " ]," : " ]");
+    }
+
+    private static Vector128<double>[] GetCurrentEvaluationWeights()
+    {
+        Vector128<double>[] w = new Vector128<double>[TotalFeatures];
+        for (int pc = 0; pc < 6; pc++)
+        {
+            int minSq = pc == 0 ? 8 : 0;
+            int maxSq = pc == 0 ? 56 : 64;
+            int mgMat = Evaluation.MgMaterial[pc];
+            int egMat = Evaluation.EgMaterial[pc];
+            int[] mgPst = Evaluation.MgPstSource[pc];
+            int[] egPst = Evaluation.EgPstSource[pc];
+
+            for (int sq = minSq; sq < maxSq; sq++)
+            {
+                w[GetPstIndex(pc, sq)] = Vector128.Create(
+                    (double)(mgMat + mgPst[sq]),
+                    (double)(egMat + egPst[sq])
+                );
+            }
+        }
+
+        w[BpIdx] = Vector128.Create((double)Evaluation.BishopPairMg, (double)Evaluation.BishopPairEg);
+        w[KmIdx] = Vector128.Create((double)Evaluation.KnightMobMg, (double)Evaluation.KnightMobEg);
+        w[BmIdx] = Vector128.Create((double)Evaluation.BishopMobMg, (double)Evaluation.BishopMobEg);
+        w[RsoIdx] = Vector128.Create((double)Evaluation.RookSemiOpenMg, (double)Evaluation.RookSemiOpenEg);
+        w[RoIdx] = Vector128.Create((double)Evaluation.RookOpenMg, (double)Evaluation.RookOpenEg);
+
+        for (int d = 1; d <= 6; d++)
+            w[PassedBaseIdx + d - 1] = Vector128.Create((double)Evaluation.PassedMg[d], (double)Evaluation.PassedEg[d]);
+
+        w[IsoIdx] = Vector128.Create((double)Evaluation.IsolatedMg, (double)Evaluation.IsolatedEg);
+        w[KooIdx] = Vector128.Create((double)Evaluation.KingOwnOpenMg, 0.0);
+        w[KosoIdx] = Vector128.Create((double)Evaluation.KingOwnSemiOpenMg, 0.0);
+        w[KaoIdx] = Vector128.Create((double)Evaluation.KingAdjacentOpenMg, 0.0);
+        w[KasoIdx] = Vector128.Create((double)Evaluation.KingAdjacentSemiOpenMg, 0.0);
+        w[QkcIdx] = Vector128.Create((double)Evaluation.QueenlessKingCenterMg, 0.0);
+        w[KnoIdx] = Vector128.Create((double)Evaluation.KnightOutpostMg, 0.0);
+        w[TempoIdx] = Vector128.Create((double)Evaluation.TempoBonus, (double)Evaluation.TempoBonus);
+        return w;
+    }
+
+    private static Vector128<double>[] GetPestoBaselineWeights()
+    {
+        Vector128<double>[] w = new Vector128<double>[TotalFeatures];
+
+        int[] officialMgMat = [82, 337, 365, 477, 1025, 0];
+        int[] officialEgMat = [94, 281, 297, 512, 936, 0];
+
+        for (int pc = 0; pc < 6; pc++)
+        {
+            int minSq = pc == 0 ? 8 : 0;
+            int maxSq = pc == 0 ? 56 : 64;
+            int[] mgPst = Evaluation.MgPstSource[pc];
+            int[] egPst = Evaluation.EgPstSource[pc];
+
+            for (int sq = minSq; sq < maxSq; sq++)
+            {
+                w[GetPstIndex(pc, sq)] = Vector128.Create(
+                    (double)(officialMgMat[pc] + mgPst[sq]),
+                    (double)(officialEgMat[pc] + egPst[sq])
+                );
+            }
+        }
+
+        w[TempoIdx] = Vector128<double>.Zero;
+        return w;
     }
 }
