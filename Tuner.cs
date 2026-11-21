@@ -27,8 +27,6 @@ public static class Tuner
     private const int KnoIdx = 385;
     private const int TempoIdx = 386;
 
-    private const short NoEval = short.MinValue;
-
     private static readonly Vector128<double>[] PhaseWeights = CreatePhaseWeights();
 
     #region Immutable Official PeSTO Baseline (For --fresh Tunes)
@@ -269,7 +267,7 @@ public static class Tuner
         Console.WriteLine($"Optimal K = {k:F4} (scale = {scale:F6}), Initial MSE = {initialMse:F6}");
 
         int workerCount = Environment.ProcessorCount;
-        Console.WriteLine($"\n[4/4] Running Adam across {workerCount} CPU cores...");
+        Console.WriteLine($"\n[4/4] Running Adam across {workerCount} CPU cores (Press Ctrl+C anytime to stop & print best weights)...");
 
         Vector128<double>[] mVec = new Vector128<double>[TotalFeatures];
         Vector128<double>[] vVec = new Vector128<double>[TotalFeatures];
@@ -287,11 +285,11 @@ public static class Tuner
         const double oneMinusBeta1 = 1.0 - beta1;
         const double oneMinusBeta2 = 1.0 - beta2;
         const double eps = 1e-8;
-        double initialLr = freshBaseline ? 1.0 : 0.20;
-        const double lrDecay = 0.004;
+        double initialLr = freshBaseline ? 1.0 : 0.25;
+        const double lrDecay = 0.005;
         const double lambda = 0.0;
-        const double minRelImprovement = 1e-4; // Requires ~0.000003 MSE drop within patience window
-        const int patience = 40;
+        const double minRelImprovement = 2e-4;
+        const int patience = 30;
 
         Vector128<double> epsVec = Vector128.Create(eps);
         double beta1T = 1.0;
@@ -307,7 +305,6 @@ public static class Tuner
         int totalPositions = positions.Length;
         int chunkSize = (totalPositions + workerCount - 1) / workerCount;
 
-        // Allow pressing Ctrl+C at any time to stop early and still print the best weights
         bool cancelRequested = false;
         ConsoleCancelEventHandler cancelHandler = (_, e) =>
         {
@@ -459,6 +456,11 @@ public static class Tuner
 
                 for (int i = 0; i < TotalFeatures; i++)
                 {
+                    // PassedBaseIdx (rank 1 = 7th rank) is 100% collinear with the 8 7th-rank Pawn PSTs
+                    // because enemy pawns never exist on the 8th rank. Freeze it here and decompose cleanly
+                    // in PrintFormattedResults so it doesn't drift negative fighting the 7th-rank PST.
+                    if (i == PassedBaseIdx) continue;
+
                     Vector128<double> g = (grad0[i] * invN) + (weights[i] * lambda);
                     Vector128<double> m = (mVec[i] * beta1) + (g * oneMinusBeta1);
                     Vector128<double> v = (vVec[i] * beta2) + (g * g * oneMinusBeta2);
@@ -555,7 +557,7 @@ public static class Tuner
     {
         fen = string.Empty;
         whiteResult = 0.5f;
-        searchEval = NoEval;
+        searchEval = 0;
 
         int bracketStart = line.IndexOf('[');
         if (bracketStart != -1)
@@ -855,7 +857,7 @@ public static class Tuner
             {
                 ref readonly PositionRecord pos = ref Unsafe.Add(ref posRef, p);
                 double target = pos.Result;
-                if (pos.Eval != NoEval)
+                if (pos.Eval != 0)
                 {
                     double searchEvalWhite = pos.Eval * pos.StmSign;
                     double evalTargetProb = 1.0 / (1.0 + Math.Exp(-scale * searchEvalWhite));
@@ -991,7 +993,15 @@ public static class Tuner
                 double eval = Vector128.Dot(sum, phaseW);
                 double sigmoid = 1.0 / (1.0 + Math.Exp(-scale * eval));
 
-                double diff = sigmoid - pos.Result;
+                double targetResult = pos.Result;
+                if (pos.Eval != 0)
+                {
+                    double searchEvalWhite = pos.Eval * pos.StmSign;
+                    double evalTargetProb = 1.0 / (1.0 + Math.Exp(-scale * searchEvalWhite));
+                    targetResult = 0.5 * pos.Result + 0.5 * evalTargetProb;
+                }
+
+                double diff = sigmoid - targetResult;
                 localErr += diff * diff;
             }
 
@@ -1044,6 +1054,7 @@ public static class Tuner
         int[] tunedEgMat = new int[6];
         int[][] tunedMgPst = new int[6][];
         int[][] tunedEgPst = new int[6][];
+        int[] passMg = new int[8], passEg = new int[8];
 
         for (int pc = 0; pc < 6; pc++)
         {
@@ -1051,25 +1062,71 @@ public static class Tuner
             tunedEgPst[pc] = new int[64];
         }
 
-        for (int pc = 0; pc < 5; pc++)
+        // 1. Decompose Pawns:
+        // Ranks 2..6 (sq 16..55) determine base Pawn Material.
+        // Rank 1 (sq 8..15, 7th rank) is 100% passed pawns, so we decompose the total 7th-rank
+        // score into MgMaterial[0] + PassedMg[1] (mean 7th-rank bonus) + MgPstSource[0][8..15] (zero-mean).
         {
-            int minSq = pc == 0 ? 8 : 0;
-            int maxSq = pc == 0 ? 56 : 64;
-            int count = maxSq - minSq;
+            Vector128<double> basePawnSum = Vector128<double>.Zero;
+            for (int sq = 16; sq < 56; sq++)
+            {
+                basePawnSum += weights[GetPstIndex(0, sq)];
+            }
 
+            int pawnMgMat = (int)Math.Round(basePawnSum.GetElement(0) / 40.0);
+            int pawnEgMat = (int)Math.Round(basePawnSum.GetElement(1) / 40.0);
+            tunedMgMat[0] = pawnMgMat;
+            tunedEgMat[0] = pawnEgMat;
+
+            for (int sq = 16; sq < 56; sq++)
+            {
+                Vector128<double> w = weights[GetPstIndex(0, sq)];
+                tunedMgPst[0][sq] = (int)Math.Round(w.GetElement(0)) - pawnMgMat;
+                tunedEgPst[0][sq] = (int)Math.Round(w.GetElement(1)) - pawnEgMat;
+            }
+
+            Vector128<double> passed1 = weights[PassedBaseIdx];
+            int[] rank1TotalMg = new int[8];
+            int[] rank1TotalEg = new int[8];
+            int rank1BonusSumMg = 0, rank1BonusSumEg = 0;
+
+            for (int f = 0; f < 8; f++)
+            {
+                int sq = 8 + f;
+                Vector128<double> totalW = weights[GetPstIndex(0, sq)] + passed1;
+                rank1TotalMg[f] = (int)Math.Round(totalW.GetElement(0));
+                rank1TotalEg[f] = (int)Math.Round(totalW.GetElement(1));
+                rank1BonusSumMg += rank1TotalMg[f] - pawnMgMat;
+                rank1BonusSumEg += rank1TotalEg[f] - pawnEgMat;
+            }
+
+            passMg[1] = (int)Math.Round(rank1BonusSumMg / 8.0);
+            passEg[1] = (int)Math.Round(rank1BonusSumEg / 8.0);
+
+            for (int f = 0; f < 8; f++)
+            {
+                int sq = 8 + f;
+                tunedMgPst[0][sq] = rank1TotalMg[f] - pawnMgMat - passMg[1];
+                tunedEgPst[0][sq] = rank1TotalEg[f] - pawnEgMat - passEg[1];
+            }
+        }
+
+        // 2. Decompose Knights, Bishops, Rooks, Queens (pc = 1..4)
+        for (int pc = 1; pc < 5; pc++)
+        {
             Vector128<double> sum = Vector128<double>.Zero;
-            for (int sq = minSq; sq < maxSq; sq++)
+            for (int sq = 0; sq < 64; sq++)
             {
                 sum += weights[GetPstIndex(pc, sq)];
             }
 
-            int mgAvg = (int)Math.Round(sum.GetElement(0) / count);
-            int egAvg = (int)Math.Round(sum.GetElement(1) / count);
+            int mgAvg = (int)Math.Round(sum.GetElement(0) / 64.0);
+            int egAvg = (int)Math.Round(sum.GetElement(1) / 64.0);
 
             tunedMgMat[pc] = mgAvg;
             tunedEgMat[pc] = egAvg;
 
-            for (int sq = minSq; sq < maxSq; sq++)
+            for (int sq = 0; sq < 64; sq++)
             {
                 Vector128<double> w = weights[GetPstIndex(pc, sq)];
                 tunedMgPst[pc][sq] = (int)Math.Round(w.GetElement(0)) - mgAvg;
@@ -1077,6 +1134,7 @@ public static class Tuner
             }
         }
 
+        // 3. King PSTs (pc = 5)
         for (int sq = 0; sq < 64; sq++)
         {
             Vector128<double> w = weights[GetPstIndex(5, sq)];
@@ -1084,8 +1142,8 @@ public static class Tuner
             tunedEgPst[5][sq] = (int)Math.Round(w.GetElement(1));
         }
 
-        int[] passMg = new int[8], passEg = new int[8];
-        for (int d = 1; d <= 6; d++)
+        // 4. Passed Pawns for ranks 2..6 (d = 2..6)
+        for (int d = 2; d <= 6; d++)
         {
             Vector128<double> w = weights[PassedBaseIdx + d - 1];
             passMg[d] = (int)Math.Round(w.GetElement(0));
