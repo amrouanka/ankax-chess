@@ -31,6 +31,129 @@ public static class Tuner
 
     private static readonly Vector128<double>[] PhaseWeights = CreatePhaseWeights();
 
+    #region Immutable Official PeSTO Baseline (For --fresh Tunes)
+
+    private static readonly int[] OfficialMgMaterial = [82, 337, 365, 477, 1025, 0];
+    private static readonly int[] OfficialEgMaterial = [94, 281, 297, 512, 936, 0];
+
+    private static readonly int[][] OfficialMgPst =
+    [
+        // Pawn
+        [    0,   0,   0,   0,   0,   0,   0,   0,
+            98, 134,  61,  95,  68, 126,  34, -11,
+            -6,   7,  26,  31,  65,  56,  25, -20,
+           -14,  13,   6,  21,  23,  12,  17, -23,
+           -27,  -2,  -5,  12,  17,   6,  10, -25,
+           -26,  -4,  -4, -10,   3,   3,  33, -12,
+           -35,  -1, -20, -23, -15,  24,  38, -22,
+             0,   0,   0,   0,   0,   0,   0,   0 ],
+        // Knight
+        [ -167, -89, -34, -49,  61, -97, -15,-107,
+           -73, -41,  72,  36,  23,  62,   7, -17,
+           -47,  60,  37,  65,  84, 129,  73,  44,
+            -9,  17,  19,  53,  37,  69,  18,  22,
+           -13,   4,  16,  13,  28,  19,  21,  -8,
+           -23,  -9,  12,  10,  19,  17,  25, -16,
+           -29, -53, -12,  -3,  -1,  18, -14, -19,
+          -105, -21, -58, -33, -17, -28, -19, -23 ],
+        // Bishop
+        [  -29,   4, -82, -37, -25, -42,   7,  -8,
+           -26,  16, -18, -13,  30,  59,  18, -47,
+           -16,  37,  43,  40,  35,  50,  37,  -2,
+            -4,   5,  19,  50,  37,  37,   7,  -2,
+            -6,  13,  13,  26,  34,  12,  10,   4,
+             0,  15,  15,  15,  14,  27,  18,  10,
+             4,  15,  16,   0,   7,  21,  33,   1,
+           -33,  -3, -14, -21, -13, -12, -39, -21 ],
+        // Rook
+        [   32,  42,  32,  51,  63,   9,  31,  43,
+            27,  32,  58,  62,  80,  67,  26,  44,
+            -5,  19,  26,  36,  17,  45,  61,  16,
+           -24, -11,   7,  26,  24,  35,  -8, -20,
+           -36, -26, -12,  -1,   9,  -7,   6, -23,
+           -45, -25, -16, -17,   3,   0,  -5, -33,
+           -44, -16, -20,  -9,  -1,  11,  -6, -71,
+           -19, -13,   1,  17,  16,   7, -37, -26 ],
+        // Queen
+        [  -28,   0,  29,  12,  59,  44,  43,  45,
+           -24, -39,  -5,   1, -16,  57,  28,  54,
+           -13, -17,   7,   8,  29,  56,  47,  57,
+           -27, -27, -16, -16,  -1,  17,  -2,   1,
+            -9, -26,  -9, -10,  -2,  -4,   3,  -3,
+           -14,   2, -11,  -2,  -5,   2,  14,   5,
+           -35,  -8,  11,   2,   8,  15,  -3,   1,
+            -1, -18,  -9,  10, -15, -25, -31, -50 ],
+        // King
+        [  -65,  23,  16, -15, -56, -34,   2,  13,
+            29,  -1, -20,  -7,  -8,  -4, -38, -29,
+            -9,  24,   2, -16, -20,   6,  22, -22,
+           -17, -20, -12, -27, -30, -25, -14, -36,
+           -49,  -1, -27, -39, -46, -44, -33, -51,
+           -14, -14, -22, -46, -44, -30, -15, -27,
+             1,   7,  -8, -64, -43, -16,   9,   8,
+           -15,  36,  12, -54,   8, -28,  24,  14 ]
+    ];
+
+    private static readonly int[][] OfficialEgPst =
+    [
+        // Pawn
+        [    0,   0,   0,   0,   0,   0,   0,   0,
+           178, 173, 158, 134, 147, 132, 165, 187,
+            94, 100,  85,  67,  56,  53,  82,  84,
+            32,  24,  13,   5,  -2,   4,  17,  17,
+            13,   9,  -3,  -7,  -7,  -8,   3,  -1,
+             4,   7,  -6,   1,   0,  -5,  -1,  -8,
+            13,   8,   8,  10,  13,   0,   2,  -7,
+             0,   0,   0,   0,   0,   0,   0,   0 ],
+        // Knight
+        [  -58, -38, -13, -28, -31, -27, -63, -99,
+           -25,  -8, -25,  -2,  -9, -25, -24, -52,
+           -24, -20,  10,   9,  -1,  -9, -19, -41,
+           -17,   3,  22,  22,  22,  11,   8, -18,
+           -18,  -6,  16,  25,  16,  17,   4, -18,
+           -23,  -3,  -1,  15,  10,  -3, -20, -22,
+           -42, -20, -10,  -5,  -2, -20, -23, -44,
+           -29, -51, -23, -15, -22, -18, -50, -64 ],
+        // Bishop
+        [  -14, -21, -11,  -8,  -7,  -9, -17, -24,
+            -8,  -4,   7, -12,  -3, -13,  -4, -14,
+             2,  -8,   0,  -1,  -2,   6,   0,   4,
+            -3,   9,  12,   9,  14,  10,   3,   2,
+            -6,   3,  13,  19,   7,  10,  -3,  -9,
+           -12,  -3,   8,  10,  13,   3,  -7, -15,
+           -14, -18,  -7,  -1,   4,  -9, -15, -27,
+           -23,  -9, -23,  -5,  -9, -16,  -5, -17 ],
+        // Rook
+        [   13,  10,  18,  15,  12,  12,   8,   5,
+            11,  13,  13,  11,  -3,   3,   8,   3,
+             7,   7,   7,   5,   4,  -3,  -5,  -3,
+             4,   3,  13,   1,   2,   1,  -1,   2,
+             3,   5,   8,   4,  -5,  -6,  -8, -11,
+            -4,   0,  -5,  -1,  -7, -12,  -8, -16,
+            -6,  -6,   0,   2,  -9,  -9, -11,  -3,
+            -9,   2,   3,  -1,  -5, -13,   4, -20 ],
+        // Queen
+        [   -9,  22,  22,  27,  27,  19,  10,  20,
+           -17,  20,  32,  41,  58,  25,  30,   0,
+           -20,   6,   9,  49,  47,  35,  19,   9,
+             3,  22,  24,  45,  57,  40,  57,  36,
+           -18,  28,  19,  47,  31,  34,  39,  23,
+           -16, -27,  15,   6,   9,  17,  10,   5,
+           -22, -23, -30, -16, -16, -23, -36, -32,
+           -33, -28, -22, -43,  -5, -32, -20, -41 ],
+        // King
+        [  -74, -35, -18, -18, -11,  15,   4, -17,
+           -12,  17,  14,  17,  17,  38,  23,  11,
+            10,  17,  23,  15,  20,  45,  44,  13,
+            -8,  22,  24,  27,  26,  33,  26,   3,
+           -18,  -4,  21,  24,  27,  23,   9, -11,
+           -19,  -3,  11,  21,  23,  16,   7,  -9,
+           -27, -11,   4,  13,  14,   4,  -5, -17,
+           -53, -34, -21, -11, -28, -14, -24, -43 ]
+    ];
+
+    #endregion
+
     public readonly record struct FeatureEntry(ushort Index, short Coeff);
 
     public readonly record struct PositionRecord(
@@ -73,16 +196,34 @@ public static class Tuner
     {
         if (args.Length < 2)
         {
-            Console.Error.WriteLine("Usage: ankax tune <dataset-path> [maxEpochs]");
+            Console.Error.WriteLine("Usage: ankax tune <dataset-path> [maxEpochs] [--fresh]");
             return 1;
         }
 
         string datasetPath = args[1];
-        int maxEpochs = args.Length >= 3 && int.TryParse(args[2], out int ep) && ep > 0 ? ep : 20000;
+        int maxEpochs = 20000;
+        bool freshBaseline = false;
+
+        for (int a = 2; a < args.Length; a++)
+        {
+            string arg = args[a];
+            if (arg.Equals("--fresh", StringComparison.OrdinalIgnoreCase) ||
+                arg.Equals("-f", StringComparison.OrdinalIgnoreCase) ||
+                arg.Equals("--reset", StringComparison.OrdinalIgnoreCase) ||
+                arg.Equals("--pesto", StringComparison.OrdinalIgnoreCase))
+            {
+                freshBaseline = true;
+            }
+            else if (int.TryParse(arg, out int ep) && ep > 0)
+            {
+                maxEpochs = ep;
+            }
+        }
 
         Console.WriteLine("=== AnkaX Sparse Texel Tuner (CSR + Multi-Threaded Adam) ===");
         Console.WriteLine($"Dataset:    {datasetPath}");
         Console.WriteLine($"Max Epochs: {maxEpochs}");
+        Console.WriteLine($"Start Mode: {(freshBaseline ? "FRESH (Official PeSTO PSTs + Material; all other terms = 0)" : "INCREMENTAL (Current Evaluation.cs weights)")}");
         Console.WriteLine($"Parameters: {TotalFeatures} MG + {TotalFeatures - 7} EG ({TotalFeatures * 2 - 7} independent weights)\n");
 
         if (!File.Exists(datasetPath))
@@ -108,8 +249,17 @@ public static class Tuner
         Vector128<double>[] evalWeights = GetCurrentEvaluationWeights();
         ValidateScores(positions, features, expectedEvals, evalWeights);
 
-        Console.WriteLine("\n[3/4] Setting up clean PeSTO baseline (PSTs + Material; Tempo and all secondary terms = 0)...");
-        Vector128<double>[] weights = GetPestoBaselineWeights();
+        Vector128<double>[] weights;
+        if (freshBaseline)
+        {
+            Console.WriteLine("\n[3/4] Setting up FRESH PeSTO baseline (PSTs + Material; Tempo and all secondary terms = 0)...");
+            weights = GetPestoBaselineWeights();
+        }
+        else
+        {
+            Console.WriteLine("\n[3/4] Initializing from current Evaluation.cs weights (pass --fresh for a clean PeSTO reset)...");
+            weights = (Vector128<double>[])evalWeights.Clone();
+        }
 
         double k = FindOptimalK(positions, features, weights);
         double scale = k * Math.Log(10.0) / 400.0;
@@ -137,11 +287,11 @@ public static class Tuner
         const double oneMinusBeta1 = 1.0 - beta1;
         const double oneMinusBeta2 = 1.0 - beta2;
         const double eps = 1e-8;
-        const double initialLr = 1.0;
-        const double lrDecay = 0.001;
+        double initialLr = freshBaseline ? 1.0 : 0.20;
+        const double lrDecay = 0.004;
         const double lambda = 0.0;
-        const double minRelImprovement = 1e-7;
-        const int patience = 100;
+        const double minRelImprovement = 1e-4; // Requires ~0.000003 MSE drop within patience window
+        const int patience = 40;
 
         Vector128<double> epsVec = Vector128.Create(eps);
         double beta1T = 1.0;
@@ -151,171 +301,193 @@ public static class Tuner
         double invN = 1.0 / positions.Length;
         double twoScale = 2.0 * scale;
 
-        double bestMse = double.MaxValue;
-        double anchorMse = double.MaxValue;
+        double bestMse = initialMse;
+        double anchorMse = initialMse;
         int noImprovementEpochs = 0;
         int totalPositions = positions.Length;
         int chunkSize = (totalPositions + workerCount - 1) / workerCount;
 
-        for (int epoch = 1; epoch <= maxEpochs; epoch++)
+        // Allow pressing Ctrl+C at any time to stop early and still print the best weights
+        bool cancelRequested = false;
+        ConsoleCancelEventHandler cancelHandler = (_, e) =>
         {
-            beta1T *= beta1;
-            beta2T *= beta2;
-            double invBiasCorr1 = 1.0 / (1.0 - beta1T);
-            double invBiasCorr2 = 1.0 / (1.0 - beta2T);
+            e.Cancel = true;
+            cancelRequested = true;
+        };
+        Console.CancelKeyPress += cancelHandler;
 
-            Parallel.For(0, workerCount, workerId =>
+        try
+        {
+            for (int epoch = 1; epoch <= maxEpochs; epoch++)
             {
-                int start = workerId * chunkSize;
-                int end = Math.Min(start + chunkSize, totalPositions);
-                ThreadBuffer local = buffers[workerId];
-                local.Clear();
-
-                if (start >= end) return;
-
-                ref PositionRecord posRef = ref MemoryMarshal.GetArrayDataReference(positions);
-                ref FeatureEntry featRef = ref MemoryMarshal.GetArrayDataReference(features);
-                ref double targetRef = ref MemoryMarshal.GetArrayDataReference(targets);
-                ref Vector128<double> wRef = ref MemoryMarshal.GetArrayDataReference(weights);
-                ref Vector128<double> gRef = ref MemoryMarshal.GetArrayDataReference(local.Grad);
-                ref Vector128<double> phaseWRef = ref MemoryMarshal.GetArrayDataReference(PhaseWeights);
-
-                double localErr = 0.0;
-
-                for (nint p = start; p < end; p++)
+                if (cancelRequested)
                 {
-                    ref readonly PositionRecord pos = ref Unsafe.Add(ref posRef, p);
-                    ref FeatureEntry fBase = ref Unsafe.Add(ref featRef, (nint)pos.StartOffset);
-                    nint len = pos.Length;
+                    Console.WriteLine($"\n[Interrupted] Stopping at epoch {epoch} and outputting best weights (Best MSE = {bestMse:F8})...");
+                    break;
+                }
 
-                    Vector128<double> sum0 = Vector128<double>.Zero;
-                    Vector128<double> sum1 = Vector128<double>.Zero;
-                    nint i = 0;
+                beta1T *= beta1;
+                beta2T *= beta2;
+                double invBiasCorr1 = 1.0 / (1.0 - beta1T);
+                double invBiasCorr2 = 1.0 / (1.0 - beta2T);
 
-                    for (; i <= len - 4; i += 4)
+                Parallel.For(0, workerCount, workerId =>
+                {
+                    int start = workerId * chunkSize;
+                    int end = Math.Min(start + chunkSize, totalPositions);
+                    ThreadBuffer local = buffers[workerId];
+                    local.Clear();
+
+                    if (start >= end) return;
+
+                    ref PositionRecord posRef = ref MemoryMarshal.GetArrayDataReference(positions);
+                    ref FeatureEntry featRef = ref MemoryMarshal.GetArrayDataReference(features);
+                    ref double targetRef = ref MemoryMarshal.GetArrayDataReference(targets);
+                    ref Vector128<double> wRef = ref MemoryMarshal.GetArrayDataReference(weights);
+                    ref Vector128<double> gRef = ref MemoryMarshal.GetArrayDataReference(local.Grad);
+                    ref Vector128<double> phaseWRef = ref MemoryMarshal.GetArrayDataReference(PhaseWeights);
+
+                    double localErr = 0.0;
+
+                    for (nint p = start; p < end; p++)
                     {
-                        ref FeatureEntry fCurr = ref Unsafe.Add(ref fBase, i);
-                        ref readonly FeatureEntry f0 = ref fCurr;
-                        ref readonly FeatureEntry f1 = ref Unsafe.Add(ref fCurr, 1);
-                        ref readonly FeatureEntry f2 = ref Unsafe.Add(ref fCurr, 2);
-                        ref readonly FeatureEntry f3 = ref Unsafe.Add(ref fCurr, 3);
+                        ref readonly PositionRecord pos = ref Unsafe.Add(ref posRef, p);
+                        ref FeatureEntry fBase = ref Unsafe.Add(ref featRef, (nint)pos.StartOffset);
+                        nint len = pos.Length;
 
-                        sum0 += Unsafe.Add(ref wRef, (nint)f0.Index) * (double)f0.Coeff
-                              + Unsafe.Add(ref wRef, (nint)f1.Index) * (double)f1.Coeff;
-                        sum1 += Unsafe.Add(ref wRef, (nint)f2.Index) * (double)f2.Coeff
-                              + Unsafe.Add(ref wRef, (nint)f3.Index) * (double)f3.Coeff;
+                        Vector128<double> sum0 = Vector128<double>.Zero;
+                        Vector128<double> sum1 = Vector128<double>.Zero;
+                        nint i = 0;
+
+                        for (; i <= len - 4; i += 4)
+                        {
+                            ref FeatureEntry fCurr = ref Unsafe.Add(ref fBase, i);
+                            ref readonly FeatureEntry f0 = ref fCurr;
+                            ref readonly FeatureEntry f1 = ref Unsafe.Add(ref fCurr, 1);
+                            ref readonly FeatureEntry f2 = ref Unsafe.Add(ref fCurr, 2);
+                            ref readonly FeatureEntry f3 = ref Unsafe.Add(ref fCurr, 3);
+
+                            sum0 += Unsafe.Add(ref wRef, (nint)f0.Index) * (double)f0.Coeff
+                                  + Unsafe.Add(ref wRef, (nint)f1.Index) * (double)f1.Coeff;
+                            sum1 += Unsafe.Add(ref wRef, (nint)f2.Index) * (double)f2.Coeff
+                                  + Unsafe.Add(ref wRef, (nint)f3.Index) * (double)f3.Coeff;
+                        }
+
+                        Vector128<double> sum = sum0 + sum1;
+                        for (; i < len; i++)
+                        {
+                            ref readonly FeatureEntry f = ref Unsafe.Add(ref fBase, i);
+                            sum += Unsafe.Add(ref wRef, (nint)f.Index) * (double)f.Coeff;
+                        }
+
+                        Vector128<double> phaseW = Unsafe.Add(ref phaseWRef, (nint)pos.Phase);
+                        double eval = Vector128.Dot(sum, phaseW);
+                        double sigmoid = 1.0 / (1.0 + Math.Exp(-scale * eval));
+
+                        double diff = sigmoid - Unsafe.Add(ref targetRef, p);
+                        localErr += diff * diff;
+
+                        double baseGrad = twoScale * diff * sigmoid * (1.0 - sigmoid);
+                        Vector128<double> gradVec = phaseW * baseGrad;
+
+                        i = 0;
+                        for (; i <= len - 4; i += 4)
+                        {
+                            ref FeatureEntry fCurr = ref Unsafe.Add(ref fBase, i);
+                            ref readonly FeatureEntry f0 = ref fCurr;
+                            ref readonly FeatureEntry f1 = ref Unsafe.Add(ref fCurr, 1);
+                            ref readonly FeatureEntry f2 = ref Unsafe.Add(ref fCurr, 2);
+                            ref readonly FeatureEntry f3 = ref Unsafe.Add(ref fCurr, 3);
+
+                            Unsafe.Add(ref gRef, (nint)f0.Index) += gradVec * (double)f0.Coeff;
+                            Unsafe.Add(ref gRef, (nint)f1.Index) += gradVec * (double)f1.Coeff;
+                            Unsafe.Add(ref gRef, (nint)f2.Index) += gradVec * (double)f2.Coeff;
+                            Unsafe.Add(ref gRef, (nint)f3.Index) += gradVec * (double)f3.Coeff;
+                        }
+
+                        for (; i < len; i++)
+                        {
+                            ref readonly FeatureEntry f = ref Unsafe.Add(ref fBase, i);
+                            Unsafe.Add(ref gRef, (nint)f.Index) += gradVec * (double)f.Coeff;
+                        }
                     }
 
-                    Vector128<double> sum = sum0 + sum1;
-                    for (; i < len; i++)
+                    local.SquaredError = localErr;
+                });
+
+                double totalSquaredError = buffers[0].SquaredError;
+                Vector128<double>[] grad0 = buffers[0].Grad;
+                for (int w = 1; w < workerCount; w++)
+                {
+                    totalSquaredError += buffers[w].SquaredError;
+                    Vector128<double>[] workerGrad = buffers[w].Grad;
+                    for (int i = 0; i < TotalFeatures; i++)
                     {
-                        ref readonly FeatureEntry f = ref Unsafe.Add(ref fBase, i);
-                        sum += Unsafe.Add(ref wRef, (nint)f.Index) * (double)f.Coeff;
-                    }
-
-                    Vector128<double> phaseW = Unsafe.Add(ref phaseWRef, (nint)pos.Phase);
-                    double eval = Vector128.Dot(sum, phaseW);
-                    double sigmoid = 1.0 / (1.0 + Math.Exp(-scale * eval));
-
-                    double diff = sigmoid - Unsafe.Add(ref targetRef, p);
-                    localErr += diff * diff;
-
-                    double baseGrad = twoScale * diff * sigmoid * (1.0 - sigmoid);
-                    Vector128<double> gradVec = phaseW * baseGrad;
-
-                    i = 0;
-                    for (; i <= len - 4; i += 4)
-                    {
-                        ref FeatureEntry fCurr = ref Unsafe.Add(ref fBase, i);
-                        ref readonly FeatureEntry f0 = ref fCurr;
-                        ref readonly FeatureEntry f1 = ref Unsafe.Add(ref fCurr, 1);
-                        ref readonly FeatureEntry f2 = ref Unsafe.Add(ref fCurr, 2);
-                        ref readonly FeatureEntry f3 = ref Unsafe.Add(ref fCurr, 3);
-
-                        Unsafe.Add(ref gRef, (nint)f0.Index) += gradVec * (double)f0.Coeff;
-                        Unsafe.Add(ref gRef, (nint)f1.Index) += gradVec * (double)f1.Coeff;
-                        Unsafe.Add(ref gRef, (nint)f2.Index) += gradVec * (double)f2.Coeff;
-                        Unsafe.Add(ref gRef, (nint)f3.Index) += gradVec * (double)f3.Coeff;
-                    }
-
-                    for (; i < len; i++)
-                    {
-                        ref readonly FeatureEntry f = ref Unsafe.Add(ref fBase, i);
-                        Unsafe.Add(ref gRef, (nint)f.Index) += gradVec * (double)f.Coeff;
+                        grad0[i] += workerGrad[i];
                     }
                 }
 
-                local.SquaredError = localErr;
-            });
+                double currentMse = totalSquaredError * invN;
+                double lr = initialLr / (1.0 + lrDecay * epoch);
 
-            double totalSquaredError = buffers[0].SquaredError;
-            Vector128<double>[] grad0 = buffers[0].Grad;
-            for (int w = 1; w < workerCount; w++)
-            {
-                totalSquaredError += buffers[w].SquaredError;
-                Vector128<double>[] workerGrad = buffers[w].Grad;
+                if (currentMse < bestMse)
+                {
+                    bestMse = currentMse;
+                    Array.Copy(weights, bestWeights, TotalFeatures);
+                }
+
+                if ((anchorMse - currentMse) > (anchorMse * minRelImprovement))
+                {
+                    anchorMse = currentMse;
+                    noImprovementEpochs = 0;
+                }
+                else
+                {
+                    noImprovementEpochs++;
+                }
+
+                if (noImprovementEpochs >= patience)
+                {
+                    Console.WriteLine($"\n[Early Stopping] Converged at epoch {epoch}. Best MSE = {bestMse:F8}.");
+                    break;
+                }
+
+                // TempoBonus is a single phase-independent parameter in Evaluation.cs,
+                // so its gradient is the sum of the MG and EG partial derivatives.
+                double tempoTotalGrad = grad0[TempoIdx].GetElement(0) + grad0[TempoIdx].GetElement(1);
+                grad0[TempoIdx] = Vector128.Create(tempoTotalGrad, tempoTotalGrad);
+
                 for (int i = 0; i < TotalFeatures; i++)
                 {
-                    grad0[i] += workerGrad[i];
+                    Vector128<double> g = (grad0[i] * invN) + (weights[i] * lambda);
+                    Vector128<double> m = (mVec[i] * beta1) + (g * oneMinusBeta1);
+                    Vector128<double> v = (vVec[i] * beta2) + (g * g * oneMinusBeta2);
+                    mVec[i] = m;
+                    vVec[i] = v;
+
+                    Vector128<double> mHat = m * invBiasCorr1;
+                    Vector128<double> vHat = v * invBiasCorr2;
+                    Vector128<double> step = (mHat * lr) / (Vector128.Sqrt(vHat) + epsVec);
+
+                    // Zero out Endgame update strictly for Middlegame-only King Safety / Outpost features
+                    if (i >= KooIdx && i <= KnoIdx)
+                    {
+                        step = step.WithElement(1, 0.0);
+                    }
+
+                    weights[i] -= step;
                 }
-            }
 
-            double currentMse = totalSquaredError * invN;
-            double lr = initialLr / (1.0 + lrDecay * epoch);
-
-            if (currentMse < bestMse)
-            {
-                bestMse = currentMse;
-                Array.Copy(weights, bestWeights, TotalFeatures);
-            }
-
-            if ((anchorMse - currentMse) > (anchorMse * minRelImprovement))
-            {
-                anchorMse = currentMse;
-                noImprovementEpochs = 0;
-            }
-            else
-            {
-                noImprovementEpochs++;
-            }
-
-            if (noImprovementEpochs >= patience)
-            {
-                Console.WriteLine($"\n[Early Stopping] Converged at epoch {epoch}. Best MSE = {bestMse:F8}.");
-                break;
-            }
-
-            // TempoBonus is a single phase-independent parameter in Evaluation.cs,
-            // so its gradient is the sum of the MG and EG partial derivatives.
-            double tempoTotalGrad = grad0[TempoIdx].GetElement(0) + grad0[TempoIdx].GetElement(1);
-            grad0[TempoIdx] = Vector128.Create(tempoTotalGrad, tempoTotalGrad);
-
-            for (int i = 0; i < TotalFeatures; i++)
-            {
-                Vector128<double> g = (grad0[i] * invN) + (weights[i] * lambda);
-                Vector128<double> m = (mVec[i] * beta1) + (g * oneMinusBeta1);
-                Vector128<double> v = (vVec[i] * beta2) + (g * g * oneMinusBeta2);
-                mVec[i] = m;
-                vVec[i] = v;
-
-                Vector128<double> mHat = m * invBiasCorr1;
-                Vector128<double> vHat = v * invBiasCorr2;
-                Vector128<double> step = (mHat * lr) / (Vector128.Sqrt(vHat) + epsVec);
-
-                // Zero out Endgame update strictly for Middlegame-only King Safety / Outpost features
-                if (i >= KooIdx && i <= KnoIdx)
+                if (epoch == 1 || epoch % 25 == 0 || epoch == maxEpochs)
                 {
-                    step = step.WithElement(1, 0.0);
+                    double msPerEpoch = epochSw.Elapsed.TotalMilliseconds / epoch;
+                    Console.WriteLine($"Epoch {epoch,4} / {maxEpochs} | MSE: {currentMse:F6} | LR: {lr:F4} | Speed: {msPerEpoch:F2} ms/epoch");
                 }
-
-                weights[i] -= step;
             }
-
-            if (epoch == 1 || epoch % 25 == 0 || epoch == maxEpochs)
-            {
-                double msPerEpoch = epochSw.Elapsed.TotalMilliseconds / epoch;
-                Console.WriteLine($"Epoch {epoch,4} / {maxEpochs} | MSE: {currentMse:F6} | LR: {lr:F4} | Speed: {msPerEpoch:F2} ms/epoch");
-            }
+        }
+        finally
+        {
+            Console.CancelKeyPress -= cancelHandler;
         }
 
         Console.WriteLine($"\nOptimization complete in {totalSw.ElapsedMilliseconds:N0} ms! Best MSE: {bestMse:F8}");
@@ -1090,26 +1262,25 @@ public static class Tuner
     {
         Vector128<double>[] w = new Vector128<double>[TotalFeatures];
 
-        int[] officialMgMat = [82, 337, 365, 477, 1025, 0];
-        int[] officialEgMat = [94, 281, 297, 512, 936, 0];
-
         for (int pc = 0; pc < 6; pc++)
         {
             int minSq = pc == 0 ? 8 : 0;
             int maxSq = pc == 0 ? 56 : 64;
-            int[] mgPst = Evaluation.MgPstSource[pc];
-            int[] egPst = Evaluation.EgPstSource[pc];
+            int mgMat = OfficialMgMaterial[pc];
+            int egMat = OfficialEgMaterial[pc];
+            int[] mgPst = OfficialMgPst[pc];
+            int[] egPst = OfficialEgPst[pc];
 
             for (int sq = minSq; sq < maxSq; sq++)
             {
                 w[GetPstIndex(pc, sq)] = Vector128.Create(
-                    (double)(officialMgMat[pc] + mgPst[sq]),
-                    (double)(officialEgMat[pc] + egPst[sq])
+                    (double)(mgMat + mgPst[sq]),
+                    (double)(egMat + egPst[sq])
                 );
             }
         }
 
-        w[TempoIdx] = Vector128<double>.Zero;
+        // All secondary positional features (368..385) and TempoIdx (386) remain 0.0
         return w;
     }
 }
