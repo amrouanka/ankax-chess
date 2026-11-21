@@ -4,34 +4,6 @@ using static Board;
 using static MoveGenerator;
 using static PieceAttacks;
 
-// =============================================================================
-//  Evaluation — static, tapered (middlegame ↔ endgame) positional scoring.
-//
-//  Score convention:
-//      Positive  = White is better
-//      Negative  = Black is better
-//      Returned score is flipped at the end if it's Black to move, so the
-//      search always sees "my score" from the side-to-move's perspective.
-//
-//  Tapered eval:
-//      Every term produces two numbers: `mg` (middlegame) and `eg` (endgame).
-//      A `phase` counter tracks how much non-pawn material is still on the
-//      board (queens weigh most, minors least). The final score blends mg/eg
-//      proportionally to the current phase. This gives smooth transitions
-//      rather than sudden jumps when a piece trade crosses some threshold.
-//
-//  Feature set (all baked into the same mg/eg pair):
-//      • Material + piece–square tables (PeSTO values)
-//      • Bishop pair bonus
-//      • Knight and bishop mobility
-//      • Knight outposts
-//      • Rook on open / semi-open file
-//      • Passed pawns (by rank)
-//      • Isolated pawns
-//      • King exposure on own and adjacent files
-//      • Queenless endgame king centralization
-// =============================================================================
-
 public static class Evaluation
 {
     // =========================================================================
@@ -52,8 +24,8 @@ public static class Evaluation
     //   0=Pawn  1=Knight  2=Bishop  3=Rook  4=Queen  5=King
     // King is 0 because it's never captured; its "value" is implicit in game
     // termination, not in evaluation.
-    public static int[] MgMaterial = [87, 347, 373, 462, 1043, 0];
-    public static int[] EgMaterial = [85, 275, 293, 517, 933, 0];
+    public static int[] MgMaterial = [82, 337, 365, 477, 1025, 0];
+    public static int[] EgMaterial = [94, 281, 297, 512, 936, 0];
 
     // Starting position phase: 2 sides × (2×Knight + 2×Bishop + 2×Rook + 1×Queen)
     //   = 2 × (2·1 + 2·1 + 2·2 + 1·4) = 24.
@@ -67,46 +39,46 @@ public static class Evaluation
 
     // Having both bishops is worth a small bonus because they cover
     // complementary colour complexes.
-    public static int BishopPairMg = 26, BishopPairEg = 46;
+    public static int BishopPairMg = 0, BishopPairEg = 0;
 
     // Mobility = (number of safe destination squares) − (a baseline).
     // Subtracting a baseline keeps the "average" piece near zero so the
     // mobility term doesn't silently inflate material values.
-    public static int KnightMobMg = 1, KnightMobEg = 0, KnightMobBase = 4;
-    public static int BishopMobMg = 4, BishopMobEg = 4, BishopMobBase = 6;
+    public static int KnightMobMg = 0, KnightMobEg = 0, KnightMobBase = 4;
+    public static int BishopMobMg = 0, BishopMobEg = 0, BishopMobBase = 6;
 
     // Rook on a file with no friendly pawn:
     //   semi-open = only enemy pawns on it (good attacking lane)
     //   open      = no pawns at all (best — rook sees the whole file)
-    public static int RookSemiOpenMg = 23, RookSemiOpenEg = 13;
-    public static int RookOpenMg = 60, RookOpenEg = 2;
+    public static int RookSemiOpenMg = 0, RookSemiOpenEg = 0;
+    public static int RookOpenMg = 0, RookOpenEg = 0;
 
     // Passed pawn bonus indexed by squares left to promotion (0..7):
     //   index 1 = one step from promoting, index 6 = still on its start square.
     // A pawn gets this if no enemy pawn can block or capture it on its way
     // to promotion. The closer to promotion, the bigger the bonus — much
     // larger in the endgame where promotion threats dominate.
-    public static int[] PassedMg = [0, 1, 30, 12, 0, 4, 9, 0];
-    public static int[] PassedEg = [0, 52, 96, 54, 30, 11, 5, 0];
+    public static int[] PassedMg = [0, 0, 0, 0, 0, 0, 0, 0];
+    public static int[] PassedEg = [0, 0, 0, 0, 0, 0, 0, 0];
 
     // A pawn with no friendly pawn on either adjacent file. Weak because it
     // can never be defended by another pawn.
-    public static int IsolatedMg = -18, IsolatedEg = -9;
+    public static int IsolatedMg = 0, IsolatedEg = 0;
 
     // King safety: penalties for open/semi-open files near the king. Only
     // applied in the middlegame — in the endgame the king wants to be active.
-    public static int KingOwnOpenMg = 68, KingOwnSemiOpenMg = 18;
-    public static int KingAdjacentOpenMg = 34, KingAdjacentSemiOpenMg = 13;
+    public static int KingOwnOpenMg = 0, KingOwnSemiOpenMg = 0;
+    public static int KingAdjacentOpenMg = 0, KingAdjacentSemiOpenMg = 0;
 
     // Once both queens are gone, encourage the king toward the centre so it
     // can help its pawns promote.
-    public static int QueenlessKingCenterMg = 24;
+    public static int QueenlessKingCenterMg = 0;
 
     // Knight sitting on a square where:
     //   • it's protected by a friendly pawn
     //   • it can't be kicked by any enemy pawn on adjacent files
     // Outposts are classical strong squares (think c5/d5/e5/f5 for White).
-    public static int KnightOutpostMg = 47;
+    public static int KnightOutpostMg = 0;
 
     // Tempo bonus: static advantage awarded to the side to move
     internal const int TempoBonus = 8;
@@ -130,116 +102,116 @@ public static class Evaluation
     [
         // Pawn — the back rank is zero because pawns never stand there.
         [    0,   0,   0,   0,   0,   0,   0,   0,
-           105, 125,  83, 132,  83,  66,   0, -16,
-             6,  -7,  17,   5,  35,  73,  17,  -7,
-            -4,   5,   9,  24,  26,  18,   5, -18,
-           -21, -16,  -1,  12,  14,  10,  -9, -24,
-           -19, -21,  -4,  -9,   1,   4,  10, -11,
-           -31, -15, -23, -20, -16,  21,  18, -21,
+            98, 134,  61,  95,  68, 126,  34, -11,
+            -6,   7,  26,  31,  65,  56,  25, -20,
+           -14,  13,   6,  21,  23,  12,  17, -23,
+           -27,  -2,  -5,  12,  17,   6,  10, -25,
+           -26,  -4,  -4, -10,   3,   3,  33, -12,
+           -35,  -1, -20, -23, -15,  24,  38, -22,
              0,   0,   0,   0,   0,   0,   0,   0 ],
         // Knight — rim is dim; centre squares are prized.
-        [ -181, -83, -48, -31,  97,-108,  -1,-118,
-           -76, -46,  38,  53,  -4,  66,   8, -11,
-           -45,  39,  34,  53,  91, 108,  66,  46,
-            -8,  18,   7,  49,  38,  71,  26,  29,
-           -10,  13,  18,  14,  34,  27,  32,  -2,
-           -16,  -1,  18,  23,  35,  28,  34,  -7,
-           -23, -38,  -3,  10,  15,  25,   5,  -3,
-          -109, -15, -42, -29,  -1, -14,  -9, -13 ],
+        [ -167, -89, -34, -49,  61,-110, -15,-107,
+           -73, -41,  72,  36,  23,  62,   7, -17,
+           -47,  60,  37,  65,  84, 129,  73,  44,
+            -9,  17,  19,  53,  37,  69,  18,  22,
+           -13,   4,  16,  13,  28,  19,  21,  -8,
+           -23,  -9,  12,  10,  19,  17,  25, -19,
+           -29, -53, -12,  -3,  -1,  18, -14, -19,
+          -105, -21, -58, -33, -17, -28, -19, -23 ],
         // Bishop — long diagonals and fianchetto squares.
-        [  -29, -14,-129, -64, -48, -49, -14, -14,
-           -32, -13, -32, -61,  18,  -1,   1, -63,
-           -28,  20,  -2,  14,   8,  48,  17,  -6,
-           -12,  -2,  -1,  32,  20,  15,  -1,  -5,
-           -11,   3,  -3,  20,  21,  -3,   0,   2,
-            -6,   9,   6,   2,   5,  23,  12,   4,
-            -5,  15,   6,  -4,   5,  13,  33,   3,
-           -37, -11, -12, -24, -15, -11, -42, -26 ],
+        [  -29,   4,-128, -54, -42, -50,   8,  -2,
+           -26,   3, -19, -42,  16,  12,  -3, -32,
+            -4,  26,  21,  19,  18,  58,  34,   7,
+           -13,  15,  11,  41,  25,  22,   0,   7,
+           -12,   5,  10,  21,  22,  -8,   2,   0,
+           -16,  13,   8,   4,   2,  19,  12,   4,
+            -4,  15,  12,  -7,   2,  12,  33,   7,
+           -23,  -3, -14, -37, -25,  -9, -16, -10 ],
         // Rook — likes the 7th rank and central files.
-        [   17,  32,   7,  52,  47,  -8,  28,  11,
-            15,   8,  52,  66,  86,  70,  -8,  35,
-           -17,   1,  -2,  14,  -9,  41,  69,  -3,
-           -37, -24,  -5,  12,   4,  29, -10, -30,
-           -41, -30, -26,  -9,  -5,  -4,  14, -24,
-           -42, -25, -20, -25,  -7,   8,   0, -25,
-           -39, -14, -28, -17,  -5,   7,  -5, -63,
-           -11, -13,  -7,   1,   4,  13, -30, -14 ],
+        [   27,  32,  12,  41,  38,  -5,  45,  18,
+            16,  13,  44,  61,  67,  67,   4,  30,
+           -18,  14,   8,  22,   5,  54,  69,  13,
+           -30, -11,  10,  30,  16,  35,  -4, -15,
+           -42, -18, -12,   2,  -2,   4,   8, -25,
+           -46, -25, -15, -19,   0,   5,  11, -21,
+           -70, -23, -20, -13,  -6,  10,   4, -58,
+           -25, -16, -14,  -2,   3,  13, -11, -19 ],
         // Queen — modest PST; mobility and tactics dominate its value.
-        [  -40, -14,  -1,   4,  93,  78,  91,  24,
-           -26, -50, -17,   0, -56,  45,  -6,  43,
-            -6, -17, -12,  -9,   5,  65,  43,  56,
-           -31, -25, -22, -22, -10,   8,  -3,  -6,
-           -10, -34, -10, -11,  -3,  -1,  -1,  -4,
-           -18,   2, -11,   2,  -1,   2,  11,   2,
-           -37,  -8,  11,   6,  15,  20,   4,   9,
-             1, -16,  -9,  10, -16, -16, -36, -54 ],
+        [  -37,  11,  12,  23,  87, 102, 100,  36,
+           -26, -58,   2,  10, -22,  83,   6,  53,
+           -14, -13,  -2,   1,  18,  82,  68,  47,
+           -22, -18, -11,  -9,   2,  24,  15,   7,
+           -17, -23, -12, -14,  -9,   2,   6,   8,
+           -24,  -2,  -3,  -8,  -5,  -2,  10,  -4,
+           -31, -11,  -1,  -4,  -3,   1,   0,  -9,
+           -26, -25, -17,  -4, -18, -37, -49, -32 ],
         // King (middlegame) — castled corners are safe; the centre is fatal.
-        [  -65,  23,  16, -15, -56, -34,   2,  13,
-            29,  -1, -20,  -7,  -8,  -4, -38, -29,
-            -9,  24,   2, -16, -20,   6,  22, -22,
-           -17, -20, -12, -27, -30, -25, -14, -36,
-           -49,  -1, -27, -39, -46, -44, -33, -51,
-           -14, -14, -22, -46, -44, -30, -15, -27,
-            27,  31,  -6, -44, -31, -10,  35,  38,
-            10,  66,  44, -30,  32, -13,  50,  42 ],
+        [  -59,  31,  23,  -2, -43, -26,  14,  17,
+            33,  12, -11,  -4,   0,   8, -20, -32,
+             0,  46,  18,   1,  -2,  19,  38, -15,
+            -6,   1,   6, -21, -21,  -6,   7, -26,
+           -39,  22,  -5, -42, -37, -22,   4, -42,
+           -13,  -3, -20, -38, -32, -32,  20,  -5,
+            28,  12, -18, -50, -33, -29,  33,  39,
+            20,  62,  28, -39,   0, -48,  44,  49 ]
     ];
 
     internal static readonly int[][] EgPstSource =
     [
         // Pawn — promotion race dominates; advanced pawns are huge.
         [    0,   0,   0,   0,   0,   0,   0,   0,
-           164, 147, 132, 100, 117, 112, 152, 183,
-            50,  46,  25,   7,  -4,  -7,  22,  34,
-            21,   8,  -4, -22, -18, -13,   1,   6,
-            11,   5,  -8, -15, -12, -14,  -6,  -5,
-             1,   0, -10,  -8,  -6, -10, -14, -13,
-            13,  -2,   5,  -5,   4,  -9, -13, -11,
+           152, 126, 116,  82,  84,  86, 124, 143,
+            46,  32,   6, -17, -31, -19,   1,  15,
+            16,   1, -11, -38, -32, -32, -14,  -9,
+             2,  -6, -23, -28, -26, -27, -22, -18,
+            -7, -16, -21, -29, -18, -21, -28, -25,
+             3, -11,  -8, -17,  -3, -10, -23, -25,
              0,   0,   0,   0,   0,   0,   0,   0 ],
         // Knight — still prefers the centre, but values are compressed.
-        [  -37, -30,   0, -24, -36, -15, -61, -86,
-           -18,   2, -17,  -2,   2, -27, -20, -47,
-           -20, -11,  12,  13,  -8, -10, -19, -45,
-           -12,   5,  28,  23,  26,  10,   9, -17,
-           -12,  -3,  22,  30,  20,  20,   9, -17,
-           -16,   6,   8,  18,  12,   4, -15, -15,
-           -30, -15,  -1,   2,   3, -12, -19, -40,
-            -6, -45, -15,  -5, -16, -11, -49, -63 ],
+        [  -31, -12,  12,   0, -13,  13, -48, -78,
+           -13,   6,  -4,  18,  22, -16,  -8, -35,
+           -12,  11,  20,  21,   8,  14,   0, -25,
+            -5,  13,  30,  45,  46,  31,  27,  -2,
+            -7,  11,  29,  36,  40,  34,  18,  -1,
+           -32,   3,   5,  24,  20,   4,  -4, -28,
+           -36,  -8, -15,   2,   8, -18, -21, -34,
+           -18, -58, -23, -11, -18, -20, -51, -73 ],
         // Bishop — long diagonals remain preferable.
-        [  -11, -16,   6,  -1,   3,  -2,  -4, -22,
-            -3,  -5,   3,  -6, -10,  -5,  -8,  -4,
-             4, -10,  -2, -11, -12, -14,  -4,   4,
-            -2,   3,   4,  -7,  -2,  -3,  -5,   2,
-            -5,  -3,   3,   1, -10,  -1,  -7,  -6,
-            -6,  -6,   2,  -1,   5, -11,  -3, -11,
-            -6, -18,  -9,  -3,  -2,  -9, -16, -24,
-            -9,  -3, -13,  -1,  -2,  -7,   3,  -9 ],
+        [   11,   4,  24,  16,  13,   8,   1, -11,
+             0,   8,   8,  12,   3,   7,   5,   1,
+             4,   4,  -3,  -6,  -2,   6,   7,   4,
+             1,   6,   0,  -6,   3,  -2,  14,   7,
+            -4,  -2,   8,   0,  -6,   2,  -1,  -4,
+            -8,   1,  -4,  -3,   2, -10, -11, -11,
+            -7, -26, -15, -11,  -8, -21, -22, -43,
+           -17,  -6, -30,  -9,  -9, -15, -13, -20 ],
         // Rook — activity matters more than any one square.
-        [   19,  14,  23,  11,  13,  24,  17,  19,
-            16,  21,   9,   3, -12,   3,  21,  11,
-            17,  17,  13,  11,  12,  -1,  -5,   7,
-            18,  14,  19,   5,   8,   5,   7,  18,
-            15,  15,  18,   6,   3,   2,  -4,   3,
-             8,  10,   3,   5,  -3,  -8,  -3,  -5,
-             8,   0,   8,   8,  -5,  -5,  -7,  12,
-             7,  10,  11,   7,   3,  -3,  12,  -8 ],
+        [   23,  19,  31,  20,  24,  37,  27,  31,
+            22,  27,  16,  10,   1,   2,  24,  13,
+            20,  10,  16,   7,  13,   8,  -8,  13,
+            15,  13,  15,   5,   8,   6,   8,  16,
+            -1,  13,  13,   5,   6,   7,  -4,  -5,
+           -23,  -6, -10, -15, -13, -16, -17, -23,
+           -32, -31, -21, -28, -30, -33, -32, -21,
+           -20, -18, -12, -20, -18, -10, -17, -27 ],
         // Queen — rewards centralization in simplified positions.
-        [   25,  52,  60,  55,  14,  11, -12,  58,
-            -1,  49,  66,  71, 118,  35,  46,  17,
-            -9,  31,  43,  87,  83,  45,  37,  15,
-            33,  44,  54,  73,  90,  68,  85,  62,
-             2,  66,  49,  81,  60,  61,  71,  51,
-            18, -11,  43,  32,  39,  47,  37,  43,
-            12,   7,  -6,   6,   3,  -6, -24, -18,
-           -19,  -2,   6, -27,  24, -16,   7, -13 ],
+        [   16,  36,  47,  49,  11,  12, -16,  46,
+            -5,  46,  46,  64, 117,  37,  34,   7,
+           -20,  -2,  26,  62,  75,  45,  37,  12,
+           -22,  21,  30,  61,  80,  68,  76,  53,
+           -38,  18,  17,  53,  45,  31,  23,  24,
+           -40, -25,  -5, -14, -19,  -7, -28, -17,
+           -49, -50, -67, -49, -58, -82, -96, -65,
+           -63, -64, -59, -65, -55, -76, -49, -33 ],
         // King (endgame) — march to the centre to support pawns.
-        [  -74, -47, -33, -26,   2,  25, -11, -26,
-           -35,   4,  10,   9,  11,  26,  23,  21,
-            -9,   5,  13,   9,  13,  33,  28,   5,
-           -20,  19,  19,  34,  28,  33,  26,   5,
-           -15,  -8,  25,  36,  45,  27,  18,  -3,
-           -21,  -3,  17,  33,  35,  24,   7,  -9,
-           -35, -11,  12,  25,  26,  12,  -9, -29,
-           -65, -50, -25,   1, -24,  -6, -36, -65 ],
+        [  -78, -28, -13,  -2,  10,  18,  -1, -36,
+           -22,  28,  31,  17,  18,  26,  48,  -1,
+            15,  39,  36,  32,  27,  41,  44,  15,
+             9,  34,  40,  33,  31,  34,  33,   9,
+            -7,  19,  31,  35,  29,  24,  14,  -5,
+            -7,   6,  10,  24,  19,   5, -13, -18,
+            -3,  -7,   7,  12,   7,   6, -22, -35,
+           -50, -26,  -6, -16, -45,  -5, -31, -91 ]
     ];
 
     #endregion
