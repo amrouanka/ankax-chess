@@ -449,16 +449,11 @@ public static class Tuner
                     break;
                 }
 
-                // TempoBonus is a single phase-independent parameter in Evaluation.cs,
-                // so its gradient is the sum of the MG and EG partial derivatives.
                 double tempoTotalGrad = grad0[TempoIdx].GetElement(0) + grad0[TempoIdx].GetElement(1);
                 grad0[TempoIdx] = Vector128.Create(tempoTotalGrad, tempoTotalGrad);
 
                 for (int i = 0; i < TotalFeatures; i++)
                 {
-                    // PassedBaseIdx (rank 1 = 7th rank) is 100% collinear with the 8 7th-rank Pawn PSTs
-                    // because enemy pawns never exist on the 8th rank. Freeze it here and decompose cleanly
-                    // in PrintFormattedResults so it doesn't drift negative fighting the 7th-rank PST.
                     if (i == PassedBaseIdx) continue;
 
                     Vector128<double> g = (grad0[i] * invN) + (weights[i] * lambda);
@@ -471,7 +466,6 @@ public static class Tuner
                     Vector128<double> vHat = v * invBiasCorr2;
                     Vector128<double> step = (mHat * lr) / (Vector128.Sqrt(vHat) + epsVec);
 
-                    // Zero out Endgame update strictly for Middlegame-only King Safety / Outpost features
                     if (i >= KooIdx && i <= KnoIdx)
                     {
                         step = step.WithElement(1, 0.0);
@@ -514,7 +508,6 @@ public static class Tuner
 
             ParseFEN(fenPart);
 
-            // Guard against missing/duplicate kings or pawns on ranks 1/8
             if (PopCount(bitboards[K]) != 1 || PopCount(bitboards[k]) != 1 ||
                 ((bitboards[P] | bitboards[p]) & 0xFF000000000000FFUL) != 0)
             {
@@ -1062,10 +1055,6 @@ public static class Tuner
             tunedEgPst[pc] = new int[64];
         }
 
-        // 1. Decompose Pawns:
-        // Ranks 2..6 (sq 16..55) determine base Pawn Material.
-        // Rank 1 (sq 8..15, 7th rank) is 100% passed pawns, so we decompose the total 7th-rank
-        // score into MgMaterial[0] + PassedMg[1] (mean 7th-rank bonus) + MgPstSource[0][8..15] (zero-mean).
         {
             Vector128<double> basePawnSum = Vector128<double>.Zero;
             for (int sq = 16; sq < 56; sq++)
@@ -1111,7 +1100,6 @@ public static class Tuner
             }
         }
 
-        // 2. Decompose Knights, Bishops, Rooks, Queens (pc = 1..4)
         for (int pc = 1; pc < 5; pc++)
         {
             Vector128<double> sum = Vector128<double>.Zero;
@@ -1134,7 +1122,6 @@ public static class Tuner
             }
         }
 
-        // 3. King PSTs (pc = 5)
         for (int sq = 0; sq < 64; sq++)
         {
             Vector128<double> w = weights[GetPstIndex(5, sq)];
@@ -1142,7 +1129,6 @@ public static class Tuner
             tunedEgPst[5][sq] = (int)Math.Round(w.GetElement(1));
         }
 
-        // 4. Passed Pawns for ranks 2..6 (d = 2..6)
         for (int d = 2; d <= 6; d++)
         {
             Vector128<double> w = weights[PassedBaseIdx + d - 1];
@@ -1338,7 +1324,6 @@ public static class Tuner
             }
         }
 
-        // All secondary positional features (368..385) and TempoIdx (386) remain 0.0
         return w;
     }
 }
