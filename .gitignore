@@ -487,3 +487,4 @@ releases/
 
 data/*
 !data/.gitkeep
+!data/noob_3moves.epd
