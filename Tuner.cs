@@ -114,9 +114,9 @@ public static class Tuner
         // =========================================================================
         // UNCOMMENT THE TWO LINES BELOW FOR A 100% ZERO-BIAS (TABULA RASA) RUN:
         // =========================================================================
-        // Array.Clear(initialMg);
-        // Array.Clear(initialEg);
-        // Console.WriteLine("[Zero-Bias] Wiped all initial weights to 0.0! Tuning from complete scratch...");
+        Array.Clear(initialMg);
+        Array.Clear(initialEg);
+        Console.WriteLine("[Zero-Bias] Wiped all initial weights to 0.0! Tuning from complete scratch...");
         // =========================================================================
 
         // Re-compute initial MSE after potential zeroing so statistics are accurate
@@ -133,10 +133,19 @@ public static class Tuner
         double[] mEg = new double[TotalFeatures];
         double[] vEg = new double[TotalFeatures];
 
+        // ============================================================================
+        // HYPERPARAMETERS & L2 REGULARIZATION CONFIGURATION
+        // ============================================================================
         const double beta1 = 0.9;
         const double beta2 = 0.999;
         const double eps = 1e-8;
         const double initialLr = 0.4;
+
+        // L2 Regularization factor (Weight Decay)
+        // Recommended starting values:
+        //   1e-4 (0.0001)  -> Strong penalty (smoothes PSTs aggressive, removes all spikes)
+        //   1e-5 (0.00001) -> Light penalty (preserves small positional nuances)
+        const double lambda = 1e-5;
 
         double beta1T = 1.0;
         double beta2T = 1.0;
@@ -156,7 +165,7 @@ public static class Tuner
         // Start bestMse at double.MaxValue so it tracks currentMse correctly
         double bestMse = double.MaxValue;
         int noImprovementEpochs = 0;
-        const double minImprovementThreshold = 1e-7; // Threshold for smooth convergence
+        const double minImprovementThreshold = 1e-6; // Threshold for smooth convergence
 
         for (int epoch = 1; epoch <= maxEpochs; epoch++)
         {
@@ -266,19 +275,25 @@ public static class Tuner
             currentMse = totalSquaredError * invN;
             double lr = initialLr / (1.0 + 0.0005 * epoch);
 
+            // ========================================================================
+            // PARAMETER UPDATE LOOP WITH L2 REGULARIZATION
+            // ========================================================================
             for (int i = 0; i < TotalFeatures; i++)
             {
-                double gMg = gradMg[i] * invN;
+                // Middlegame gradient + L2 Regularization penalty
+                double gMg = (gradMg[i] * invN) + (lambda * weightsMg[i]);
+
                 mMg[i] = beta1 * mMg[i] + (1.0 - beta1) * gMg;
                 vMg[i] = beta2 * vMg[i] + (1.0 - beta2) * gMg * gMg;
                 double mHatMg = mMg[i] / biasCorr1;
                 double vHatMg = vMg[i] / biasCorr2;
                 weightsMg[i] -= lr * mHatMg / (Math.Sqrt(vHatMg) + eps);
 
-                // Indices >= KooIdx are MG-only in Evaluation.cs
+                // Endgame gradient + L2 Regularization penalty (Indices >= KooIdx are MG-only)
                 if (i < KooIdx)
                 {
-                    double gEg = gradEg[i] * invN;
+                    double gEg = (gradEg[i] * invN) + (lambda * weightsEg[i]);
+
                     mEg[i] = beta1 * mEg[i] + (1.0 - beta1) * gEg;
                     vEg[i] = beta2 * vEg[i] + (1.0 - beta2) * gEg * gEg;
                     double mHatEg = mEg[i] / biasCorr1;
