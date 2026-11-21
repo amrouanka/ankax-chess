@@ -29,7 +29,7 @@ public static class Tuner
 
     private static readonly Vector128<double>[] PhaseWeights = CreatePhaseWeights();
 
-    #region Immutable Official PeSTO Baseline (For --fresh Tunes)
+    #region Immutable Official PeSTO Baseline (For --fresh Tunes & K Calibration)
 
     private static readonly int[] OfficialMgMaterial = [82, 337, 365, 477, 1025, 0];
     private static readonly int[] OfficialEgMaterial = [94, 281, 297, 512, 936, 0];
@@ -247,11 +247,13 @@ public static class Tuner
         Vector128<double>[] evalWeights = GetCurrentEvaluationWeights();
         ValidateScores(positions, features, expectedEvals, evalWeights);
 
+        // Always anchor K to the official PeSTO baseline so incremental runs cannot drift in scale
+        Vector128<double>[] pestoWeights = GetPestoBaselineWeights();
         Vector128<double>[] weights;
         if (freshBaseline)
         {
             Console.WriteLine("\n[3/4] Setting up FRESH PeSTO baseline (PSTs + Material; Tempo and all secondary terms = 0)...");
-            weights = GetPestoBaselineWeights();
+            weights = pestoWeights;
         }
         else
         {
@@ -259,7 +261,7 @@ public static class Tuner
             weights = (Vector128<double>[])evalWeights.Clone();
         }
 
-        double k = FindOptimalK(positions, features, weights);
+        double k = FindOptimalK(positions, features, pestoWeights);
         double scale = k * Math.Log(10.0) / 400.0;
 
         double[] targets = PrecomputeTargets(positions, scale);
@@ -933,10 +935,9 @@ public static class Tuner
         return totalError / positions.Length;
     }
 
-    private static double ComputeMse(
+    private static double ComputeReferenceMse(
         PositionRecord[] positions,
-        FeatureEntry[] features,
-        Vector128<double>[] weights,
+        double[] refEvals,
         double scale)
     {
         int workerCount = Environment.ProcessorCount;
@@ -950,40 +951,14 @@ public static class Tuner
             if (start >= end) return;
 
             ref PositionRecord posRef = ref MemoryMarshal.GetArrayDataReference(positions);
-            ref FeatureEntry featRef = ref MemoryMarshal.GetArrayDataReference(features);
-            ref Vector128<double> wRef = ref MemoryMarshal.GetArrayDataReference(weights);
-            ref Vector128<double> phaseWRef = ref MemoryMarshal.GetArrayDataReference(PhaseWeights);
+            ref double evalRef = ref MemoryMarshal.GetArrayDataReference(refEvals);
 
             double localErr = 0.0;
 
             for (nint p = start; p < end; p++)
             {
                 ref readonly PositionRecord pos = ref Unsafe.Add(ref posRef, p);
-                ref FeatureEntry fBase = ref Unsafe.Add(ref featRef, (nint)pos.StartOffset);
-                nint len = pos.Length;
-
-                Vector128<double> sum0 = Vector128<double>.Zero;
-                Vector128<double> sum1 = Vector128<double>.Zero;
-                nint i = 0;
-
-                for (; i <= len - 4; i += 4)
-                {
-                    ref FeatureEntry fCurr = ref Unsafe.Add(ref fBase, i);
-                    sum0 += Unsafe.Add(ref wRef, (nint)fCurr.Index) * (double)fCurr.Coeff
-                          + Unsafe.Add(ref wRef, (nint)Unsafe.Add(ref fCurr, 1).Index) * (double)Unsafe.Add(ref fCurr, 1).Coeff;
-                    sum1 += Unsafe.Add(ref wRef, (nint)Unsafe.Add(ref fCurr, 2).Index) * (double)Unsafe.Add(ref fCurr, 2).Coeff
-                          + Unsafe.Add(ref wRef, (nint)Unsafe.Add(ref fCurr, 3).Index) * (double)Unsafe.Add(ref fCurr, 3).Coeff;
-                }
-
-                Vector128<double> sum = sum0 + sum1;
-                for (; i < len; i++)
-                {
-                    ref readonly FeatureEntry f = ref Unsafe.Add(ref fBase, i);
-                    sum += Unsafe.Add(ref wRef, (nint)f.Index) * (double)f.Coeff;
-                }
-
-                Vector128<double> phaseW = Unsafe.Add(ref phaseWRef, (nint)pos.Phase);
-                double eval = Vector128.Dot(sum, phaseW);
+                double eval = Unsafe.Add(ref evalRef, p);
                 double sigmoid = 1.0 / (1.0 + Math.Exp(-scale * eval));
 
                 double targetResult = pos.Result;
@@ -1010,8 +985,46 @@ public static class Tuner
         return totalError / positions.Length;
     }
 
-    private static double FindOptimalK(PositionRecord[] positions, FeatureEntry[] features, Vector128<double>[] weights)
+    private static double FindOptimalK(
+        PositionRecord[] positions,
+        FeatureEntry[] features,
+        Vector128<double>[] referenceWeights)
     {
+        // Precompute static reference evaluations once so the 30 golden-section steps don't re-traverse 189M features
+        double[] refEvals = new double[positions.Length];
+        int workerCount = Environment.ProcessorCount;
+        int chunkSize = (positions.Length + workerCount - 1) / workerCount;
+
+        Parallel.For(0, workerCount, workerId =>
+        {
+            int start = workerId * chunkSize;
+            int end = Math.Min(start + chunkSize, positions.Length);
+            if (start >= end) return;
+
+            ref PositionRecord posRef = ref MemoryMarshal.GetArrayDataReference(positions);
+            ref FeatureEntry featRef = ref MemoryMarshal.GetArrayDataReference(features);
+            ref Vector128<double> wRef = ref MemoryMarshal.GetArrayDataReference(referenceWeights);
+            ref Vector128<double> phaseWRef = ref MemoryMarshal.GetArrayDataReference(PhaseWeights);
+            ref double evalRef = ref MemoryMarshal.GetArrayDataReference(refEvals);
+
+            for (nint p = start; p < end; p++)
+            {
+                ref readonly PositionRecord pos = ref Unsafe.Add(ref posRef, p);
+                ref FeatureEntry fBase = ref Unsafe.Add(ref featRef, (nint)pos.StartOffset);
+                nint len = pos.Length;
+
+                Vector128<double> sum = Vector128<double>.Zero;
+                for (nint i = 0; i < len; i++)
+                {
+                    ref readonly FeatureEntry f = ref Unsafe.Add(ref fBase, i);
+                    sum += Unsafe.Add(ref wRef, (nint)f.Index) * (double)f.Coeff;
+                }
+
+                Vector128<double> phaseW = Unsafe.Add(ref phaseWRef, (nint)pos.Phase);
+                Unsafe.Add(ref evalRef, p) = Vector128.Dot(sum, phaseW);
+            }
+        });
+
         double a = 0.1, b = 5.0;
         double phi = (1.0 + Math.Sqrt(5.0)) / 2.0;
         double resphi = 2.0 - phi;
@@ -1019,8 +1032,8 @@ public static class Tuner
 
         double c = a + resphi * (b - a);
         double d = b - resphi * (b - a);
-        double fc = ComputeMse(positions, features, weights, c * logFactor);
-        double fd = ComputeMse(positions, features, weights, d * logFactor);
+        double fc = ComputeReferenceMse(positions, refEvals, c * logFactor);
+        double fd = ComputeReferenceMse(positions, refEvals, d * logFactor);
 
         for (int i = 0; i < 30; i++)
         {
@@ -1028,13 +1041,13 @@ public static class Tuner
             {
                 b = d; d = c; fd = fc;
                 c = a + resphi * (b - a);
-                fc = ComputeMse(positions, features, weights, c * logFactor);
+                fc = ComputeReferenceMse(positions, refEvals, c * logFactor);
             }
             else
             {
                 a = c; c = d; fc = fd;
                 d = b - resphi * (b - a);
-                fd = ComputeMse(positions, features, weights, d * logFactor);
+                fd = ComputeReferenceMse(positions, refEvals, d * logFactor);
             }
         }
 
